@@ -117,7 +117,6 @@ class CellCnn(object):
 
     def fit(self, train_samples, train_phenotypes, outdir, valid_samples=None,
             valid_phenotypes=None, generate_valid_set=True):
-
         """ Trains a CellCnn model.
 
         Args:
@@ -149,9 +148,9 @@ class CellCnn(object):
             - best_model_index : list index of the best model
             - config : list of neural network configurations used
             - scaler : a z-transform scaler object fitted to the training data
-            - n_classes : number of output classes
+            - n_classes : number of output classe s
         """
-
+        #regression = True
         res = train_model(train_samples, train_phenotypes, outdir,
                           valid_samples, valid_phenotypes, generate_valid_set,
                           scale=self.scale, nrun=self.nrun, regression=self.regression,
@@ -169,7 +168,6 @@ class CellCnn(object):
         return self
 
     def predict(self, new_samples, ncell_per_sample=None):
-
         """ Makes predictions for new samples.
 
         Args:
@@ -250,7 +248,7 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     # copy the list of samples so that they are not modified in place
     train_samples = copy.deepcopy(train_samples)
-    if valid_samples is not None:
+    if valid_samples is not None: #todo kann nur null sein wenn wir die percentage ändern. Außer ich führe fit aus nem notebook aus... (nicht via cmd)
         valid_samples = copy.deepcopy(valid_samples)
 
     # normalize extreme values
@@ -300,6 +298,7 @@ def train_model(train_samples, train_phenotypes, outdir,
         z_scaler = None
 
     X_train, id_train = shuffle(X_train, id_train)
+    # todo i could insert the labels here already ? building a multi classification function.
     train_phenotypes = np.asarray(train_phenotypes)
 
     # an array containing the phenotype for each single cell
@@ -366,6 +365,7 @@ def train_model(train_samples, train_phenotypes, outdir,
             X_tr = X_tr[cut:]
             y_tr = y_tr[cut:]
     else:
+        # immer bei regression
         # generate 'nsubset' multi-cell inputs per input sample
         if per_sample:
             X_tr, y_tr = generate_subsets(X_train, train_phenotypes, id_train,
@@ -373,7 +373,7 @@ def train_model(train_samples, train_phenotypes, outdir,
             if (valid_samples is not None) or generate_valid_set:
                 X_v, y_v = generate_subsets(X_valid, valid_phenotypes, id_valid,
                                             nsubset, ncell, per_sample)
-        # generate 'nsubset' multi-cell inputs per class
+        # generate 'nsubset' multi-cell inputs per class #todo this performs it per phenotype ?
         else:
             nsubset_list = []
             for pheno in range(len(np.unique(train_phenotypes))):
@@ -388,7 +388,7 @@ def train_model(train_samples, train_phenotypes, outdir,
                 X_v, y_v = generate_subsets(X_valid, valid_phenotypes, id_valid,
                                             nsubset_list, ncell, per_sample)
     logger.info("Done.")
-
+    # ###########################################################
     # neural network configuration
     # batch size
     bs = 200
@@ -405,6 +405,8 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     # train some neural networks with different parameter configurations
     accuracies = np.zeros(nrun)
+
+    # here we store all our built models
     w_store = dict()
     config = dict()
     config['nfilter'] = []
@@ -412,6 +414,8 @@ def train_model(train_samples, train_phenotypes, outdir,
     config['maxpool_percentage'] = []
     lr = learning_rate
 
+    # how many runs ? -> nrun
+    # im training the nn´´ here
     for irun in range(nrun):
         if verbose:
             logger.info(f"Training network: {irun + 1}")
@@ -437,6 +441,7 @@ def train_model(train_samples, train_phenotypes, outdir,
 
         filepath = os.path.join(outdir, 'nnet_run_%d.hdf5' % irun)
         try:
+            # todo these things below are the same...
             if not regression:
                 check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
                                                   mode='auto')
@@ -460,12 +465,13 @@ def train_model(train_samples, train_phenotypes, outdir,
                 logger.info(f"Best validation accuracy: {valid_metric:.2f}")
                 accuracies[irun] = valid_metric
 
+            #regression we have train + validation metric
             else:
                 train_metric = model.evaluate(X_tr, y_tr, batch_size=bs)
                 logger.info(f"Best train loss: {train_metric:.2f}")
                 valid_metric = model.evaluate(X_v, y_v, batch_size=bs)
                 logger.info(f"Best validation loss: {valid_metric:.2f}")
-                accuracies[irun] = - valid_metric
+                accuracies[irun] = - valid_metric # todo why the negative: Because we want to have the least loss-value here so we need to turn it all around to later get the best net...
 
             # extract the network parameters
             w_store[irun] = model.get_weights()
@@ -475,6 +481,7 @@ def train_model(train_samples, train_phenotypes, outdir,
             sys.stderr.write(str(e) + '\n')
 
     # the top 3 performing networks
+    # w_store = the whole built models
     model_sorted_idx = np.argsort(accuracies)[::-1][:3]
     best_3_nets = [w_store[i] for i in model_sorted_idx]
     best_net = best_3_nets[0]
@@ -485,8 +492,10 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     # post-process the learned filters
     # cluster weights from all networks that achieved accuracy above the specified thershold
+    #######
     w_cons, cluster_res = cluster_profiles(w_store, nmark, accuracies, accur_thres,
                                            dendrogram_cutoff=dendrogram_cutoff)
+    # todo wstore are the params used in the method, but i actually only assign weights here dont I?
     results = {
         'clustering_result': cluster_res,
         'selected_filters': w_cons,
@@ -503,6 +512,7 @@ def train_model(train_samples, train_phenotypes, outdir,
     if (valid_samples is not None) and (w_cons is not None):
         maxpool_percentage = config['maxpool_percentage'][best_accuracy_idx]
         if regression:
+            ################### todo watch this ####################
             tau = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotypes,
                                          maxpool_percentage)
             results['filter_tau'] = tau
@@ -529,6 +539,7 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                          kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
                          name='conv1')(data_input)
 
+    ############## todo: pooling layer #######################
     # the cell grouping part (top-k pooling)
     pooled = layers.Lambda(pool_top_k, output_shape=(nfilter,), arguments={'k': k})(conv)
 
@@ -543,6 +554,7 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                               kernel_initializer=initializers.RandomUniform(),
                               kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
                               name='output')(pooled)
+    # regressing, we output only 1 class here
     else:
         output = layers.Dense(units=1,
                               activation='linear',
@@ -555,7 +567,7 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
         model.compile(optimizer=optimizers.Adam(learning_rate=lr),
                       loss='categorical_crossentropy',
                       metrics=['accuracy'])
-    else:
+    else: # todo check if it makes sence to use same lr for MSE as in crossentropy
         model.compile(optimizer=optimizers.Adam(learning_rate=lr),
                       loss='mean_squared_error')
     return model

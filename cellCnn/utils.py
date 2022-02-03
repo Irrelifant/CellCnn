@@ -132,20 +132,24 @@ def cluster_tightness(data, metric='cosine'):
 
 
 def cluster_profiles(param_dict, nmark, accuracies, accur_thres=.99,
-                     dendrogram_cutoff=.5):
+                     dendrogram_cutoff=.5): #todo check this out
     accum = []
     # if not at least 3 models reach the accuracy threshold, select the filters from the 3 best
     if np.sort(accuracies)[-3] < accur_thres:
         accur_thres = np.sort(accuracies)[-3]
 
+    #### todo filter combination
     # combine filters from multiple models
     for i, params in param_dict.items():
         if accuracies[i] >= accur_thres:
             W_tot = keras_param_vector(params)
             accum.append(W_tot)
+    ####### todo accum will always be at least 3 (best) models and they have (filters, markers) shape. vstack stacks the filters
     w_strong = np.vstack(accum)
 
     # perform hierarchical clustering on cosine distances
+    ####### 'average' linkage
+    ####### todo why do we cut out the last markers weights ?
     Z = linkage(w_strong[:, :nmark + 1], 'average', metric='cosine')
     clusters = fcluster(Z, dendrogram_cutoff, criterion='distance') - 1
     c = Counter(clusters)
@@ -172,7 +176,7 @@ def normalize_outliers(X, lq=.5, hq=99.5, stop=None):
         X[marker_t > high, jj] = high
     return X
 
-
+# todo quantile normalisation ?
 def normalize_outliers_to_control(ctrl_list, list2, lq=.5, hq=99.5, stop=None):
     X = np.vstack(ctrl_list)
     accum = []
@@ -224,6 +228,7 @@ def generate_subsets(X, pheno_map, sample_id, nsubsets, ncell,
         if per_sample:
             S[ylabel] = per_sample_subsets(X_i, nsubsets, ncell, k_init)
         else:
+            #todo this line causes trouble when trying the multi-cell type thing, evtl take the index -> des sollte nie bei regression passieren
             n = nsubsets[pheno_map[ylabel]]
             S[ylabel] = per_sample_subsets(X_i, n, ncell, k_init)
 
@@ -276,7 +281,6 @@ def generate_biased_subsets(X, pheno_map, sample_id, x_ctrl, nsubset_ctrl, nsubs
     Xt, yt = sku.shuffle(Xt, yt)
     return Xt, yt
 
-
 def single_filter_output(filter_params, valid_samples, mp):
     y_pred = np.zeros(len(valid_samples))
     nmark = valid_samples[0].shape[1]
@@ -286,7 +290,7 @@ def single_filter_output(filter_params, valid_samples, mp):
     for i, x in enumerate(valid_samples):
         g = relu(np.sum(w.reshape(1, -1) * x, axis=1) + b)
         ntop = max(1, int(mp / 100. * x.shape[0]))
-        gpool = np.mean(np.sort(g)[-ntop:])
+        gpool = np.mean(np.sort(g)[-ntop:]) # todo why need i sort that first when taking mean anyways ?
         y_pred[i] = gpool
     return y_pred, np.argmax(w_out)
 
@@ -313,11 +317,11 @@ def get_filters_regression(filters, scaler, valid_samples, valid_phenotypes, mp)
     if scaler is not None:
         valid_samples = copy.deepcopy(valid_samples)
         valid_samples = [scaler.transform(x) for x in valid_samples]
-
+    # wir haben 1 filter mit 39 parametern (example data)
     for i, filter_params in enumerate(filters):
         y_pred, _dummy = single_filter_output(filter_params, valid_samples, mp)
         # compute Kendall's tau for filter i
-        w_out = filter_params[-1]
+        w_out = filter_params[-1] #todo it takes only the last filter_param not filter i ?
         filter_tau[i] = stats.kendalltau(y_true, w_out * y_pred)[0]
     return filter_tau
 

@@ -20,6 +20,7 @@ statsmodels= "*"
 FlowIO= "*"
 tensorflow = "*"
 cellcnn = {editable = true,path = "."}
+jupyter = "*"
 
 [requires]
 python_version = "3.7"

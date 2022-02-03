@@ -62,6 +62,7 @@ def main():
     parser.add_argument('--quant_normed', action='store_true', default=False,
                         help='only use this option if the input data already lies in the [0, 1] interval,'
                              'e.g. after quantile normalization')
+    # hier machen wir später beim standardScaler(std=False)
 
     # multi-cell input specific
     parser.add_argument('--ncell', type=int, help='number of cells per multi-cell input',
@@ -77,6 +78,7 @@ def main():
     parser.add_argument('--maxpool_percentages', nargs='+', type=float,
                         help='list of choices (percentage of multi-cell input) for top-k max pooling',
                         default=[0.01, 1, 5, 20])
+    #todo code smell this differs from model.py ( [0.01, 1., 5., 20., 100.])
     parser.add_argument('--nfilter_choice', nargs='+', type=int,
                         help='list of choices for number of filters', default=list(range(3, 10)))
     parser.add_argument('--learning_rate', type=float, default=0.005,
@@ -154,7 +156,9 @@ def main():
     valid_phenotypes = [phenotypes[i] for i in val]
 
     logger.info(f"Samples used for model training: {[fcs_info[i][0] for i in train]}")
+    logger.info(f"Pheno used for model training: {train_phenotypes}")
     logger.info(f"Samples used for validation: {[fcs_info[i][0] for i in val]}")
+    logger.info(f"Pheno used for valid: {valid_phenotypes}")
 
     # always generate multi-cell inputs on a per-sample basis for regression
     if args.regression:
