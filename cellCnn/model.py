@@ -90,7 +90,8 @@ class CellCnn(object):
                  nfilter_choice=None, dropout='auto', dropout_p=.5,
                  coeff_l1=0, coeff_l2=0.0001, learning_rate=None,
                  regression=False, max_epochs=20, patience=5, nrun=15, dendrogram_cutoff=0.4,
-                 accur_thres=.95, verbose=1):
+                 accur_thres=.95, verbose=1,
+                 mtl=True):
 
         # initialize model attributes
         self.scale = scale
@@ -232,8 +233,15 @@ def train_model(train_samples, train_phenotypes, outdir,
                 learning_rate=None, coeff_l1=0, coeff_l2=1e-4, dropout='auto', dropout_p=.5,
                 max_epochs=20, patience=5,
                 dendrogram_cutoff=0.4, accur_thres=.95, verbose=1):
-
+### for first trial i just lazily added the "second task y" at the end, this can be done better!
     """ Performs a CellCnn analysis """
+    if isinstance(train_phenotypes, list):
+        #todo make extendable
+        mtl=True
+        train_phenotypes_2 = copy.deepcopy(train_phenotypes[1]) # phenotype - class
+        train_phenotypes= copy.deepcopy(train_phenotypes[0])  # freq - regression
+        valid_phenotypes_2=copy.deepcopy(valid_phenotypes[1]) # phenotype - class
+        valid_phenotypes=copy.deepcopy(valid_phenotypes[0])  # freq -reg
 
     if maxpool_percentages is None:
         maxpool_percentages = [0.01, 1., 5., 20., 100.]
@@ -252,20 +260,30 @@ def train_model(train_samples, train_phenotypes, outdir,
         valid_samples = copy.deepcopy(valid_samples)
 
     # normalize extreme values
-    # we assume that 0 corresponds to the control class
+    # we assume that 0 corresponds to the control class #todo des hab ich mal aus gelassen ...
     if subset_selection == 'outlier':
+        ### this only goes for bi-classification!
         ctrl_list = [train_samples[i] for i in np.where(np.array(train_phenotypes) == 0)[0]]
         test_list = [train_samples[i] for i in np.where(np.array(train_phenotypes) != 0)[0]]
         train_samples = normalize_outliers_to_control(ctrl_list, test_list)
+
+        ctrl_list_2 = [train_samples[i] for i in np.where(np.array(train_phenotypes_2) == 0)[0]]
+        test_list_2 = [train_samples[i] for i in np.where(np.array(train_phenotypes_2) != 0)[0]]
+        train_samples_2 = normalize_outliers_to_control(ctrl_list_2, test_list_2)
 
         if valid_samples is not None:
             ctrl_list = [valid_samples[i] for i in np.where(np.array(valid_phenotypes) == 0)[0]]
             test_list = [valid_samples[i] for i in np.where(np.array(valid_phenotypes) != 0)[0]]
             valid_samples = normalize_outliers_to_control(ctrl_list, test_list)
 
+            ctrl_list_2 = [valid_samples[i] for i in np.where(np.array(valid_phenotypes_2) == 0)[0]]
+            test_list_2 = [valid_samples[i] for i in np.where(np.array(valid_phenotypes_2) != 0)[0]]
+            valid_samples_2 = normalize_outliers_to_control(ctrl_list_2, test_list_2)   ##
+
     # merge all input samples (X_train, X_valid)
     # and generate an identifier for each of them (train_id, valid_id)
     train_sample_ids = np.arange(len(train_phenotypes))
+    train_sample_ids_2 = np.arange(len(train_phenotypes_2))
     if (valid_samples is None) and (not generate_valid_set):
 
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
@@ -273,6 +291,7 @@ def train_model(train_samples, train_phenotypes, outdir,
     elif (valid_samples is None) and generate_valid_set:
         X, sample_id = combine_samples(train_samples, train_sample_ids)
         valid_phenotypes = train_phenotypes
+        valid_phenotypes_2 = train_phenotypes_2
 
         # split into train-validation partitions
         eval_folds = 5
@@ -283,8 +302,13 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     else:
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
+
         valid_sample_ids = np.arange(len(valid_phenotypes))
         X_valid, id_valid = combine_samples(valid_samples, valid_sample_ids)
+        ### valid_sample_ids sollten gleich sein für pheno und cd4
+        #valid_sample_ids_2 = np.arange(len(valid_phenotypes_2))
+        #X_valid_2, id_valid_2 = combine_samples(valid_samples, valid_sample_ids_2)
+        #todo X-valid-2 is vermutlich quatsch
 
     if quant_normed:
         z_scaler = StandardScaler(with_mean=True, with_std=False)
@@ -298,11 +322,13 @@ def train_model(train_samples, train_phenotypes, outdir,
         z_scaler = None
 
     X_train, id_train = shuffle(X_train, id_train)
-    # todo i could insert the labels here already ? building a multi classification function.
+    #
     train_phenotypes = np.asarray(train_phenotypes)
+    train_phenotypes_2 = np.asarray(train_phenotypes_2)
 
     # an array containing the phenotype for each single cell
     y_train = train_phenotypes[id_train]
+    y_train_2 = train_phenotypes_2[id_train]
 
     if (valid_samples is not None) or generate_valid_set:
         if scale:
@@ -312,12 +338,16 @@ def train_model(train_samples, train_phenotypes, outdir,
         valid_phenotypes = np.asarray(valid_phenotypes)
         y_valid = valid_phenotypes[id_valid]
 
+        valid_phenotypes_2 = np.asarray(valid_phenotypes_2)
+        y_valid_2 = valid_phenotypes_2[id_valid]
+
     # number of measured markers
     nmark = X_train.shape[1]
 
     # generate multi-cell inputs
     logger.info("Generating multi-cell inputs...")
 
+    #todo des hab ich erstmal weggelassen
     if subset_selection == 'outlier':
         # here we assume that class 0 is always the control class
         x_ctrl_train = X_train[y_train == 0]
@@ -367,26 +397,49 @@ def train_model(train_samples, train_phenotypes, outdir,
     else:
         # immer bei regression
         # generate 'nsubset' multi-cell inputs per input sample
-        if per_sample:
+        ### 1. regression
+        ### 2. classification
+        if mtl:
             X_tr, y_tr = generate_subsets(X_train, train_phenotypes, id_train,
                                           nsubset, ncell, per_sample)
-            if (valid_samples is not None) or generate_valid_set:
-                X_v, y_v = generate_subsets(X_valid, valid_phenotypes, id_valid,
-                                            nsubset, ncell, per_sample)
-        # generate 'nsubset' multi-cell inputs per class #todo this performs it per phenotype ?
-        else:
+
             nsubset_list = []
-            for pheno in range(len(np.unique(train_phenotypes))):
-                nsubset_list.append(nsubset // np.sum(train_phenotypes == pheno))
-            X_tr, y_tr = generate_subsets(X_train, train_phenotypes, id_train,
-                                          nsubset_list, ncell, per_sample)
+            for pheno in range(len(np.unique(train_phenotypes_2))):
+                nsubset_list.append(nsubset // np.sum(train_phenotypes_2 == pheno))
+            X_tr_2, y_tr_2 = generate_subsets(X_train, train_phenotypes_2, id_train,
+                                          nsubset_list, ncell, per_sample=False)
 
             if (valid_samples is not None) or generate_valid_set:
-                nsubset_list = []
-                for pheno in range(len(np.unique(valid_phenotypes))):
-                    nsubset_list.append(nsubset // np.sum(valid_phenotypes == pheno))
                 X_v, y_v = generate_subsets(X_valid, valid_phenotypes, id_valid,
-                                            nsubset_list, ncell, per_sample)
+                                              nsubset, ncell, per_sample)
+
+                nsubset_list = []
+                for pheno in range(len(np.unique(valid_phenotypes_2))):
+                    nsubset_list.append(nsubset // np.sum(valid_phenotypes_2 == pheno))
+                X_v_2, y_v_2 = generate_subsets(X_valid, valid_phenotypes_2, id_valid,
+                                            nsubset_list, ncell, per_sample=False)
+
+        else:
+            if per_sample: ### regression
+                X_tr, y_tr = generate_subsets(X_train, train_phenotypes, id_train,
+                                              nsubset, ncell, per_sample)
+                if (valid_samples is not None) or generate_valid_set:
+                    X_v, y_v = generate_subsets(X_valid, valid_phenotypes, id_valid,
+                                                nsubset, ncell, per_sample)
+            # generate 'nsubset' multi-cell inputs per class #todo this performs it per phenotype ?
+            else:
+                nsubset_list = []
+                for pheno in range(len(np.unique(train_phenotypes))):
+                    nsubset_list.append(nsubset // np.sum(train_phenotypes == pheno))
+                X_tr, y_tr = generate_subsets(X_train, train_phenotypes, id_train,
+                                              nsubset_list, ncell, per_sample)
+
+                if (valid_samples is not None) or generate_valid_set:
+                    nsubset_list = []
+                    for pheno in range(len(np.unique(valid_phenotypes))):
+                        nsubset_list.append(nsubset // np.sum(valid_phenotypes == pheno))
+                    X_v, y_v = generate_subsets(X_valid, valid_phenotypes, id_valid,
+                                                nsubset_list, ncell, per_sample)
     logger.info("Done.")
     # ###########################################################
     # neural network configuration
@@ -403,6 +456,10 @@ def train_model(train_samples, train_phenotypes, outdir,
         y_tr = keras.utils.to_categorical(y_tr, n_classes)
         y_v = keras.utils.to_categorical(y_v, n_classes)
 
+    if mtl:
+        n_classes = len(np.unique(train_phenotypes_2)) ### since 2 is class
+        y_tr_2 = keras.utils.to_categorical(y_tr_2, n_classes)
+        y_v_2 = keras.utils.to_categorical(y_v_2, n_classes)
     # train some neural networks with different parameter configurations
     accuracies = np.zeros(nrun)
 
@@ -437,41 +494,57 @@ def train_model(train_samples, train_phenotypes, outdir,
         # build the neural network
         model = build_model(ncell, nmark, nfilter,
                             coeff_l1, coeff_l2, k,
-                            dropout, dropout_p, regression, n_classes, lr)
+                            dropout, dropout_p, regression, n_classes, lr,
+                            mtl=mtl)
 
         filepath = os.path.join(outdir, 'nnet_run_%d.hdf5' % irun)
         try:
-            # todo these things below are the same...
-            if not regression:
+            if mtl:
                 check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
                                                   mode='auto')
                 earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
-                model.fit(X_tr, y_tr,
+                model.fit(X_tr, [y_tr, y_tr_2],
                           epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
                           validation_data=(X_v, y_v), verbose=verbose)
+            ### changed this code smell since if else resulted in exactly the same code ...
             else:
-                check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
-                                                  mode='auto')
-                earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
-                model.fit(X_tr, y_tr,
-                          epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
-                          validation_data=(X_v, y_v), verbose=verbose)
+                    check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
+                                                      mode='auto')
+                    earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
+                    model.fit(X_tr, y_tr,
+                              epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
+                              validation_data=(X_v, y_v), verbose=verbose)
 
             # load the model from the epoch with highest validation accuracy
             model.load_weights(filepath)
 
-            if not regression:
-                valid_metric = model.evaluate(X_v, y_v)[-1]
-                logger.info(f"Best validation accuracy: {valid_metric:.2f}")
-                accuracies[irun] = valid_metric
+            if mtl:
+                ### do both...
+                ### classification
+                valid_metric_class = model.evaluate(X_v_2, y_v_2)[-1]
+                logger.info(f"Best validation accuracy classification: {valid_metric_class:.2f}")
 
-            #regression we have train + validation metric
+                ### regression
+                train_metric_reg = model.evaluate(X_tr, y_tr, batch_size=bs)
+                logger.info(f"Best train loss: {train_metric_reg:.2f}")
+                valid_metric_reg = model.evaluate(X_v, y_v, batch_size=bs)
+                logger.info(f"Best validation loss: {valid_metric_reg:.2f}")
+
+                ### store both
+                accuracies[irun] = (valid_metric_class, -valid_metric_reg)
             else:
-                train_metric = model.evaluate(X_tr, y_tr, batch_size=bs)
-                logger.info(f"Best train loss: {train_metric:.2f}")
-                valid_metric = model.evaluate(X_v, y_v, batch_size=bs)
-                logger.info(f"Best validation loss: {valid_metric:.2f}")
-                accuracies[irun] = - valid_metric # todo why the negative: Because we want to have the least loss-value here so we need to turn it all around to later get the best net...
+                if not regression:
+                    valid_metric = model.evaluate(X_v, y_v)[-1]
+                    logger.info(f"Best validation accuracy: {valid_metric:.2f}")
+                    accuracies[irun] = valid_metric
+
+                #regression we have train + validation metric
+                else:
+                    train_metric = model.evaluate(X_tr, y_tr, batch_size=bs)
+                    logger.info(f"Best train loss: {train_metric:.2f}")
+                    valid_metric = model.evaluate(X_v, y_v, batch_size=bs)
+                    logger.info(f"Best validation loss: {valid_metric:.2f}")
+                    accuracies[irun] = - valid_metric # todo why the negative: Because we want to have the least loss-value here so we need to turn it all around to later get the best net...
 
             # extract the network parameters
             w_store[irun] = model.get_weights()
@@ -511,21 +584,30 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     if (valid_samples is not None) and (w_cons is not None):
         maxpool_percentage = config['maxpool_percentage'][best_accuracy_idx]
-        if regression:
-            ################### todo watch this ####################
+
+        if mtl:
             tau = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotypes,
                                          maxpool_percentage)
             results['filter_tau'] = tau
-
-        else:
             filter_diff = get_filters_classification(w_cons, z_scaler, valid_samples,
                                                      valid_phenotypes, maxpool_percentage)
             results['filter_diff'] = filter_diff
+        else:
+            if regression:
+                ################### todo watch this ####################
+                tau = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotypes,
+                                             maxpool_percentage)
+                results['filter_tau'] = tau
+
+            else:
+                filter_diff = get_filters_classification(w_cons, z_scaler, valid_samples,
+                                                         valid_phenotypes, maxpool_percentage)
+                results['filter_diff'] = filter_diff
     return results
 
 
 def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
-                k, dropout, dropout_p, regression, n_classes, lr=0.01):
+                k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl=False):
     """ Builds the neural network architecture """
 
     # the input layer
@@ -548,28 +630,46 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
         pooled = layers.Dropout(rate=dropout_p)(pooled)
 
     # network prediction output
-    if not regression:
-        output = layers.Dense(units=n_classes,
-                              activation='softmax',
-                              kernel_initializer=initializers.RandomUniform(),
-                              kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
-                              name='output')(pooled)
-    # regressing, we output only 1 class here
+    ### if mtl mode activated just add 2 output layers (regression for cd4 AND classification (pheno))
+    if mtl:
+        out_reg = layers.Dense(units=1,
+                                  activation='linear',
+                                  kernel_initializer=initializers.RandomUniform(),
+                                  kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
+                                  name='output_regression')(pooled)
+        out_class = layers.Dense(units=n_classes,
+                                  activation='softmax',
+                                  kernel_initializer=initializers.RandomUniform(),
+                                  kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
+                                  name='output_classification')(pooled)
+        model = keras.Model(inputs=data_input, outputs=[out_reg, out_class])
+        model.compile(optimizer=optimizers.Adam(learning_rate=lr),
+                      loss=['mse','categorical_crossentropy'],
+                      metrics=['mean_squared_error', 'accuracy'])
+        #todo plot_model(model, to_file='model.png', show_shapes=True)
     else:
-        output = layers.Dense(units=1,
-                              activation='linear',
-                              kernel_initializer=initializers.RandomUniform(),
-                              kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
-                              name='output')(pooled)
-    model = keras.Model(inputs=data_input, outputs=output)
+        if not regression:
+            output = layers.Dense(units=n_classes,
+                                  activation='softmax',
+                                  kernel_initializer=initializers.RandomUniform(),
+                                  kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
+                                  name='output')(pooled)
+        # regressing, we output only 1 class here
+        else:
+            output = layers.Dense(units=1,
+                                  activation='linear',
+                                  kernel_initializer=initializers.RandomUniform(),
+                                  kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
+                                  name='output')(pooled)
+        model = keras.Model(inputs=data_input, outputs=output)
 
-    if not regression:
-        model.compile(optimizer=optimizers.Adam(learning_rate=lr),
-                      loss='categorical_crossentropy',
-                      metrics=['accuracy'])
-    else: # todo check if it makes sence to use same lr for MSE as in crossentropy
-        model.compile(optimizer=optimizers.Adam(learning_rate=lr),
-                      loss='mean_squared_error')
+        if not regression:
+            model.compile(optimizer=optimizers.Adam(learning_rate=lr),
+                          loss='categorical_crossentropy',
+                          metrics=['accuracy'])
+        else: # todo check if it makes sence to use same lr for MSE as in crossentropy
+            model.compile(optimizer=optimizers.Adam(learning_rate=lr),
+                          loss='mean_squared_error')
     return model
 
 

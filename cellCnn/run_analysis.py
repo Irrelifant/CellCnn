@@ -77,8 +77,8 @@ def main():
     # neural network specific
     parser.add_argument('--maxpool_percentages', nargs='+', type=float,
                         help='list of choices (percentage of multi-cell input) for top-k max pooling',
-                        default=[0.01, 1, 5, 20])
-    #todo code smell this differs from model.py ( [0.01, 1., 5., 20., 100.])
+                        default=[0.01, 1., 5., 20., 100.])
+    #todo code smell this differs from model.py ( [0.01, 1., 5., 20., 100.]) -> fixed?!
     parser.add_argument('--nfilter_choice', nargs='+', type=int,
                         help='list of choices for number of filters', default=list(range(3, 10)))
     parser.add_argument('--learning_rate', type=float, default=0.005,

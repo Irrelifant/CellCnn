@@ -225,7 +225,7 @@ def generate_subsets(X, pheno_map, sample_id, nsubsets, ncell,
 
     for ylabel in range(n_out):
         X_i = filter_per_class(X, sample_id, ylabel)
-        if per_sample:
+        if per_sample:  ### added this so we dont run in an error next step (could maybe even replace per sample ?)
             S[ylabel] = per_sample_subsets(X_i, nsubsets, ncell, k_init)
         else:
             #todo this line causes trouble when trying the multi-cell type thing, evtl take the index -> des sollte nie bei regression passieren

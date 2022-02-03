@@ -2,6 +2,7 @@ from sklearn.metrics import mean_squared_error, r2_score, explained_variance_sco
 from sklearn.model_selection import train_test_split
 
 import cellCnn
+from cellCnn.model import CellCnn
 
 
 def get_chunks(idxs, size):
@@ -45,15 +46,15 @@ def get_fitted_model(X_train, X_valid, y_train, y_valid,
     ### for Pycharm i need to update the CellCNN model EVERY TIME I CHANGE stuff
     import importlib
     importlib.reload(cellCnn)
-    importlib.reload(cellCnn.model)
-    from cellCnn.model import CellCnn
+    #importlib.reload(cellCnn.model)
+    #from cellCnn.model import CellCnn
     ## parameters from PBMC example
     ###per_sample bei regression
+
     model = CellCnn(nrun=nrun, ncell=ncell, nsubset=nsubset, nfilter_choice=nfilters, learning_rate=learning_rate,
                     coeff_l2=coeff_l2, coeff_l1=coeff_l1, max_epochs=max_epochs, per_sample=per_sample,
                     regression=regression)
 
-    # todo hier könnt ich auch batches reingeben so das ich mehrere samples pro celltype habe
     model.fit(train_samples=X_train, train_phenotypes=y_train,
               valid_samples=X_valid, valid_phenotypes=y_valid,
               outdir=outdir)
