@@ -91,7 +91,7 @@ class CellCnn(object):
                  coeff_l1=0, coeff_l2=0.0001, learning_rate=None,
                  regression=False, max_epochs=20, patience=5, nrun=15, dendrogram_cutoff=0.4,
                  accur_thres=.95, verbose=1,
-                 mtl=True):
+                 mtl=False):
 
         # initialize model attributes
         self.scale = scale
@@ -114,6 +114,7 @@ class CellCnn(object):
         self.dendrogram_cutoff = dendrogram_cutoff
         self.accur_thres = accur_thres
         self.verbose = verbose
+        self.mtl = mtl
         self.results = None
 
     def fit(self, train_samples, train_phenotypes, outdir, valid_samples=None,
@@ -233,9 +234,10 @@ def train_model(train_samples, train_phenotypes, outdir,
                 learning_rate=None, coeff_l1=0, coeff_l2=1e-4, dropout='auto', dropout_p=.5,
                 max_epochs=20, patience=5,
                 dendrogram_cutoff=0.4, accur_thres=.95, verbose=1):
-### for first trial i just lazily added the "second task y" at the end, this can be done better!
+    ### for first trial i just lazily added the "second task y" at the end, this can be done better!
     """ Performs a CellCnn analysis """
-    if isinstance(train_phenotypes, list):
+    mtl=False
+    if any(isinstance(item, list) for item in train_phenotypes): ### is list of lists ?
         #todo make extendable
         mtl=True
         train_phenotypes_2 = copy.deepcopy(train_phenotypes[1]) # phenotype - class
@@ -267,9 +269,10 @@ def train_model(train_samples, train_phenotypes, outdir,
         test_list = [train_samples[i] for i in np.where(np.array(train_phenotypes) != 0)[0]]
         train_samples = normalize_outliers_to_control(ctrl_list, test_list)
 
-        ctrl_list_2 = [train_samples[i] for i in np.where(np.array(train_phenotypes_2) == 0)[0]]
-        test_list_2 = [train_samples[i] for i in np.where(np.array(train_phenotypes_2) != 0)[0]]
-        train_samples_2 = normalize_outliers_to_control(ctrl_list_2, test_list_2)
+        if mtl:
+            ctrl_list_2 = [train_samples[i] for i in np.where(np.array(train_phenotypes_2) == 0)[0]]
+            test_list_2 = [train_samples[i] for i in np.where(np.array(train_phenotypes_2) != 0)[0]]
+            train_samples_2 = normalize_outliers_to_control(ctrl_list_2, test_list_2)
 
         if valid_samples is not None:
             ctrl_list = [valid_samples[i] for i in np.where(np.array(valid_phenotypes) == 0)[0]]
@@ -283,15 +286,16 @@ def train_model(train_samples, train_phenotypes, outdir,
     # merge all input samples (X_train, X_valid)
     # and generate an identifier for each of them (train_id, valid_id)
     train_sample_ids = np.arange(len(train_phenotypes))
-    train_sample_ids_2 = np.arange(len(train_phenotypes_2))
+    if mtl:
+        train_sample_ids_2 = np.arange(len(train_phenotypes_2))
     if (valid_samples is None) and (not generate_valid_set):
-
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
 
     elif (valid_samples is None) and generate_valid_set:
         X, sample_id = combine_samples(train_samples, train_sample_ids)
         valid_phenotypes = train_phenotypes
-        valid_phenotypes_2 = train_phenotypes_2
+        if mtl:
+            valid_phenotypes_2 = train_phenotypes_2
 
         # split into train-validation partitions
         eval_folds = 5
@@ -324,11 +328,13 @@ def train_model(train_samples, train_phenotypes, outdir,
     X_train, id_train = shuffle(X_train, id_train)
     #
     train_phenotypes = np.asarray(train_phenotypes)
-    train_phenotypes_2 = np.asarray(train_phenotypes_2)
+    if mtl:
+        train_phenotypes_2 = np.asarray(train_phenotypes_2)
 
     # an array containing the phenotype for each single cell
     y_train = train_phenotypes[id_train]
-    y_train_2 = train_phenotypes_2[id_train]
+    if mtl:
+        y_train_2 = train_phenotypes_2[id_train]
 
     if (valid_samples is not None) or generate_valid_set:
         if scale:
@@ -338,8 +344,9 @@ def train_model(train_samples, train_phenotypes, outdir,
         valid_phenotypes = np.asarray(valid_phenotypes)
         y_valid = valid_phenotypes[id_valid]
 
-        valid_phenotypes_2 = np.asarray(valid_phenotypes_2)
-        y_valid_2 = valid_phenotypes_2[id_valid]
+        if mtl:
+            valid_phenotypes_2 = np.asarray(valid_phenotypes_2)
+            y_valid_2 = valid_phenotypes_2[id_valid]
 
     # number of measured markers
     nmark = X_train.shape[1]
@@ -400,10 +407,11 @@ def train_model(train_samples, train_phenotypes, outdir,
         ### 1. regression
         ### 2. classification
         if mtl:
+            # todo try to find an approach to get similar dimensions for reg and class
             X_tr, y_tr = generate_subsets(X_train, train_phenotypes, id_train,
                                           nsubset, ncell, per_sample)
-
             nsubset_list = []
+
             for pheno in range(len(np.unique(train_phenotypes_2))):
                 nsubset_list.append(nsubset // np.sum(train_phenotypes_2 == pheno))
             X_tr_2, y_tr_2 = generate_subsets(X_train, train_phenotypes_2, id_train,
@@ -501,19 +509,19 @@ def train_model(train_samples, train_phenotypes, outdir,
         try:
             if mtl:
                 check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
-                                                  mode='auto')
+                                                  mode='auto', verbose=1)
                 earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
                 model.fit(X_tr, [y_tr, y_tr_2],
                           epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
                           validation_data=(X_v, y_v), verbose=verbose)
             ### changed this code smell since if else resulted in exactly the same code ...
-            else:
-                    check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
-                                                      mode='auto')
-                    earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
-                    model.fit(X_tr, y_tr,
-                              epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
-                              validation_data=(X_v, y_v), verbose=verbose)
+            else: #todo wieso wurde für classification überhaupt val loss statt val_accuracy gemacht ?
+                check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
+                                                  mode='auto', verbose=1)
+                earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
+                model.fit(X_tr, y_tr,
+                          epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
+                          validation_data=(X_v, y_v), verbose=verbose)
 
             # load the model from the epoch with highest validation accuracy
             model.load_weights(filepath)

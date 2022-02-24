@@ -3,6 +3,22 @@ from sklearn.model_selection import train_test_split
 
 import cellCnn
 from cellCnn.model import CellCnn
+import numpy as np
+
+def get_chunks_from_df(patient_df, freq_df, desease_state=0, cluster=1, batch_size=100):
+    too_few_data = []
+    selection_pool = []
+    for patient, df in patient_df.items():
+        cell_types = df[df['cluster'] == cluster]
+        if len(cell_types) < batch_size:
+            too_few_data.append(df)  # todo maybe merge together several "too few ones"
+            continue
+
+        selection_idx = np.random.choice(cell_types.index, batch_size)
+        selection = cell_types.loc[selection_idx, cell_types.columns != 'cluster']  # to get 'cluster' out
+        freq = freq_df[patient]
+        selection_pool.append((selection, freq, desease_state))
+    return selection_pool, too_few_data
 
 
 def get_chunks(idxs, size):
@@ -12,13 +28,15 @@ def get_chunks(idxs, size):
     return idxs_chunks
 
 
-def calc_frequencies(df, ref_dict, freq_col='cluster'):
+def calc_frequencies(df, ref_dict, freq_col='cluster', return_list = False):
     frequency_dict = dict()
-    for key in ref_dict.keys():
-        cell_type_count = (df[df[freq_col] == key]).count()[0]
-        freq = str(cell_type_count / df.shape[0])
-        print(f'For {key} we got a freq. {freq}')
+    for key in ref_dict.keys(): # these are my clusters
+        cell_type_count = (df[df[freq_col] == key]).count()[0] # how many cells of type key
+        freq = str(cell_type_count / df.shape[0]) # freq
         frequency_dict[key] = float(freq)
+
+    if return_list:
+        return list(frequency_dict.values())
     return frequency_dict
 
 
@@ -51,9 +69,15 @@ def get_fitted_model(X_train, X_valid, y_train, y_valid,
     ## parameters from PBMC example
     ###per_sample bei regression
 
-    model = CellCnn(nrun=nrun, ncell=ncell, nsubset=nsubset, nfilter_choice=nfilters, learning_rate=learning_rate,
-                    coeff_l2=coeff_l2, coeff_l1=coeff_l1, max_epochs=max_epochs, per_sample=per_sample,
-                    regression=regression)
+    mtl=False
+    if any(isinstance(item, list) for item in y_train): ### is list of lists ?
+        mtl=True
+
+    model = CellCnn(nrun=nrun, ncell=ncell, nsubset=nsubset,
+                    nfilter_choice=nfilters, learning_rate=learning_rate,
+                    coeff_l2=coeff_l2, coeff_l1=coeff_l1,
+                    max_epochs=max_epochs, per_sample=per_sample,
+                    regression=regression, mtl=mtl)
 
     model.fit(train_samples=X_train, train_phenotypes=y_train,
               valid_samples=X_valid, valid_phenotypes=y_valid,
