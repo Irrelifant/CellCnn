@@ -1,0 +1,15 @@
+batch_size=20
+cluster=1
+model = get_fitted_model(X_train, X_valid, y_train, y_valid,
+                         nrun=30, ncell=200, nsubset=batch_size_pheno,
+                         nfilters=[3, 15, 25, 35], coeff_l1=0,
+                         coeff_l2=1e-4, max_epochs=100, learning_rate=0.01,
+                         per_sample=False, regression=False,
+                         outdir=outdir_pheno)
+ROC AUC : 0.8333333333333334
+Pred: [[0.26500763 0.73499233]
+ [0.8357961  0.16420391]
+ [0.4546486  0.54535138]
+ [0.55983822 0.44016179]
+ [0.75264394 0.24735607]]
+Obs: [1, 0, 0, 1, 0]
