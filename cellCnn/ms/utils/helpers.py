@@ -5,6 +5,36 @@ import cellCnn
 from cellCnn.model import CellCnn
 import numpy as np
 
+def get_mean_from_clusters(clusters, ref_dict, patients_cluster_ref_table):
+    min = np.inf
+    for cluster in clusters:
+        cluster_idx = list(ref_dict.keys()).index(cluster)
+        cluster_mean = patients_cluster_ref_table.iloc[:, cluster_idx].mean()
+        if min > cluster_mean:
+            min = cluster_mean
+    return min
+
+def get_chunks_from_df_mtl(patient_df, freq_df, desease_state=0, cluster=[1], batch_size=100):
+    too_few_data = []
+    selection_pool = []
+    for patient, df in patient_df.items():
+        if cluster != None:
+            cell_types = df[df['cluster'] == cluster]
+        else:
+            cell_types = df
+
+        if len(cell_types) < batch_size:
+            too_few_data.append(df)  # todo maybe merge together several "too few ones"
+            continue
+
+        selection_idx = np.random.choice(cell_types.index, batch_size)
+        selection = cell_types.loc[selection_idx, cell_types.columns != 'cluster']  # to get 'cluster' out
+        all_freqs = freq_df[patient]
+        selection_pool.append((selection, all_freqs, desease_state))
+    return selection_pool, too_few_data
+
+
+
 def get_chunks_from_df(patient_df, freq_df, desease_state=0, cluster=1, batch_size=100):
     too_few_data = []
     selection_pool = []
