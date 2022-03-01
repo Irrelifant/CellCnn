@@ -5,7 +5,8 @@ import cellCnn
 from cellCnn.model import CellCnn
 import numpy as np
 
-def get_mean_from_clusters(clusters, ref_dict, patients_cluster_ref_table):
+
+def get_min_mean_from_clusters(clusters, ref_dict, patients_cluster_ref_table):
     min = np.inf
     for cluster in clusters:
         cluster_idx = list(ref_dict.keys()).index(cluster)
@@ -14,25 +15,78 @@ def get_mean_from_clusters(clusters, ref_dict, patients_cluster_ref_table):
             min = cluster_mean
     return min
 
-def get_chunks_from_df_mtl(patient_df, freq_df, desease_state=0, cluster=[1], batch_size=100):
+
+def get_chunks_from_df_mtl(patient_df, freq_df, desease_state=0, clusters=None, batch_size=100):
     too_few_data = []
     selection_pool = []
     for patient, df in patient_df.items():
-        if cluster != None:
-            cell_types = df[df['cluster'] == cluster]
+        if len(clusters) > 1:  # several markers
+            # todo check if the case happens that some patients are strong in cluster A but not in B and in other patients its reverse
+            cluster_dfs = [df[df['cluster'] == cluster] for cluster in clusters]
+            smallest_cluster_idx = 0
+            for idx, cluster_df in enumerate(cluster_dfs):
+                if len(cluster_df) < len(cluster_dfs[smallest_cluster_idx]):
+                    smallest_cluster_idx = idx
+            cell_types = cluster_dfs[smallest_cluster_idx]
+        elif clusters != None:
+            cell_types = df[df['cluster'] == clusters]
         else:
             cell_types = df
 
         if len(cell_types) < batch_size:
-            too_few_data.append(df)  # todo maybe merge together several "too few ones"
+            too_few_data.append((df, patient))  # todo maybe merge together several "too few ones"
             continue
 
         selection_idx = np.random.choice(cell_types.index, batch_size)
         selection = cell_types.loc[selection_idx, cell_types.columns != 'cluster']  # to get 'cluster' out
-        all_freqs = freq_df[patient]
+        all_freqs = freq_df[patient]  # this saves ALL freq of that patient -> maybe reduce it to only the clusters
         selection_pool.append((selection, all_freqs, desease_state))
-    return selection_pool, too_few_data
 
+    # Step 2
+    # here i try to get more batches out of several patients with a proportional frequency
+    spare_data_amount = sum([len(data[0]) for data in too_few_data])
+    if spare_data_amount >= batch_size:
+        additional_chunks = int(spare_data_amount / batch_size)
+
+        for i in range(additional_chunks):
+            candidates = []
+            freq = 0
+            rest_size = batch_size
+            for data, patient in too_few_data:
+                if rest_size - len(data) >= 0:
+                    rest_size = rest_size - len(data)
+
+                    candidates.append(data)
+                    proportion = len(data) / batch_size
+                    freq = freq + proportion * freq_df  # mal schaun ob des geht
+                else:  # when it is less then the batchsize i cut the patients data AND add it to the chunks
+                    cut = rest_size - len(data)
+
+                    candidates.append(data[:len(data)-cut])
+                    proportion = len(data[:len(data)-cut]) / batch_size
+                    freq = freq + proportion * freq_df  # mal schaun ob des geht
+
+                    # todo add to junks
+                    rest_size = batch_size
+
+                    # doupl code....
+                    if len(clusters) > 1:  # several markers
+                        # todo check if the case happens that some patients are strong in cluster A but not in B and in other patients its reverse
+                        cluster_dfs = [df[df['cluster'] == cluster] for cluster in clusters]
+                        smallest_cluster_idx = 0
+                        for idx, cluster_df in enumerate(cluster_dfs):
+                            if len(cluster_df) < cluster_dfs[smallest_cluster_idx]:
+                                smallest_cluster_idx = idx
+                        cell_types = df[df['cluster'] == smallest_cluster_idx]
+                    elif clusters != None:
+                        cell_types = df[df['cluster'] == clusters]
+                    else:
+                        cell_types = df
+
+                    selection = cell_types.loc[:, cell_types.columns != 'cluster']  # to get 'cluster' out
+                    all_freqs = freq_df[patient]  # this saves ALL freq of that patient -> maybe reduce it to only the clusters
+                    selection_pool.append((selection, all_freqs, desease_state))
+    return selection_pool, too_few_data
 
 
 def get_chunks_from_df(patient_df, freq_df, desease_state=0, cluster=1, batch_size=100):
@@ -58,16 +112,27 @@ def get_chunks(idxs, size):
     return idxs_chunks
 
 
-def calc_frequencies(df, ref_dict, freq_col='cluster', return_list = False):
+def calc_frequencies(df, ref_dict, freq_col='cluster', return_list=False):
     frequency_dict = dict()
-    for key in ref_dict.keys(): # these are my clusters
-        cell_type_count = (df[df[freq_col] == key]).count()[0] # how many cells of type key
-        freq = str(cell_type_count / df.shape[0]) # freq
+    for key in ref_dict.keys():  # these are my clusters
+        cell_type_count = (df[df[freq_col] == key]).count()[0]  # how many cells of type key
+        freq = str(cell_type_count / df.shape[0])  # freq
         frequency_dict[key] = float(freq)
 
     if return_list:
         return list(frequency_dict.values())
     return frequency_dict
+
+def split_test_train_valid(*args, train_perc=0.8, test_perc=0.2,  valid_perc=0.5, seed=123):
+    results = dict()
+    for i, value in enumerate(args):
+        length = len(value)
+        results[f'{i}_test'] = value[:int(test_perc*length)]
+        results[f'{i}_train'] = value[int(test_perc*length):]
+        results[f'{i}_valid'] = results[f'{i}_test'][int(valid_perc*len(results[f'{i}_test'])):]
+        results[f'{i}_test'] = results[f'{i}_test'][:int(valid_perc*len(results[f'{i}_test']))]
+
+    return results.values()
 
 
 # valid perc is the mount of the TEST set that is for validation
@@ -94,14 +159,14 @@ def get_fitted_model(X_train, X_valid, y_train, y_valid,
     ### for Pycharm i need to update the CellCNN model EVERY TIME I CHANGE stuff
     import importlib
     importlib.reload(cellCnn)
-    #importlib.reload(cellCnn.model)
-    #from cellCnn.model import CellCnn
+    importlib.reload(cellCnn.model)
+    from cellCnn.model import CellCnn
     ## parameters from PBMC example
     ###per_sample bei regression
 
-    mtl=False
-    if any(isinstance(item, list) for item in y_train): ### is list of lists ?
-        mtl=True
+    mtl = False
+    if any(isinstance(item, list) for item in y_train):  ### is list of lists ?
+        mtl = True
 
     model = CellCnn(nrun=nrun, ncell=ncell, nsubset=nsubset,
                     nfilter_choice=nfilters, learning_rate=learning_rate,
@@ -113,8 +178,6 @@ def get_fitted_model(X_train, X_valid, y_train, y_valid,
               valid_samples=X_valid, valid_phenotypes=y_valid,
               outdir=outdir)
     return model
-
-
 
 
 def print_regression_model_stats(test_pred, y_test):

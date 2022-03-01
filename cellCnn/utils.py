@@ -109,6 +109,17 @@ def combine_samples(data_list, sample_id):
     return np.vstack(accum_x), np.hstack(accum_y)
 
 
+def combine_samples_mtl(data_list, sample_ids):
+    accum_x, accum_y = [], []
+    for i, ys in enumerate(zip(*sample_ids)):
+        accum_x.append(data_list[i])
+        y_combination = []
+        for y in ys:
+            y_combination.append(y * np.ones(data_list[i].shape[0], dtype=int))
+        accum_y.append(tuple(y_combination))
+    return np.vstack(accum_x), np.hstack(accum_y)
+
+
 def keras_param_vector(params):
     W = np.squeeze(params[0])
     b = params[1]
@@ -212,6 +223,38 @@ def per_sample_subsets(X, nsubsets, ncell_per_subset, k_init=False):
             X_i = kmeans_subsample(X_i, ncell_per_subset, random_state=i)
             Xres[i] = X_i.T
     return Xres
+
+
+# todo pheno map is a list of the prev pheno map now!
+def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
+                         per_sample=False, k_init=False):
+    S = dict() # dict aller label zu subsets per sample
+    n_out = len(np.unique(sample_id))
+
+    for ylabel in range(n_out):
+        X_i = filter_per_class(X, sample_id, ylabel)
+        # regression
+        if per_sample:
+            S[ylabel] = per_sample_subsets(X_i, nsubsets, ncell, k_init)
+        # todo class mtl
+        else:
+            n = nsubsets[pheno_map[ylabel]]
+            S[ylabel] = per_sample_subsets(X_i, n, ncell, k_init)
+
+    # mix them
+    data_list, y_list = [], []
+    for y_i, x_i in S.items():
+        data_list.append(x_i)
+        y_values = []
+        for single_map in pheno_map:
+            y_values.append(single_map[y_i] * np.ones(x_i.shape[0], dtype=int))
+        y_list.append(tuple(y_values))
+
+    Xt = np.vstack(data_list)
+    yt = np.hstack(y_list)
+    Xt, yt[0], yt[1] = sku.shuffle(Xt, yt[0], yt[1]) # i dont swap this because i want all elements to be shuffled, not just the labels ...
+    yt = np.hstack(y_list)
+    return Xt, yt
 
 
 def generate_subsets(X, pheno_map, sample_id, nsubsets, ncell,
@@ -335,4 +378,3 @@ def get_selected_cells(filter_w, data, scaler=None, filter_response_thres=0,
         return np.hstack([g, g_thres])
     else:
         return (g > filter_response_thres).astype(int)
-

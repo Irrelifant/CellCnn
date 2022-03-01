@@ -13,7 +13,7 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import shuffle
 
-from cellCnn.utils import combine_samples, normalize_outliers_to_control
+from cellCnn.utils import combine_samples, normalize_outliers_to_control, generate_subsets_mtl, combine_samples_mtl
 from cellCnn.utils import cluster_profiles, keras_param_vector
 from cellCnn.utils import generate_subsets, generate_biased_subsets
 from cellCnn.utils import get_filters_classification, get_filters_regression
@@ -169,7 +169,6 @@ class CellCnn(object):
         return self
 
     def predict(self, new_samples, ncell_per_sample=None):
-
         """ Makes predictions for new samples.
 
         Args:
@@ -234,8 +233,18 @@ def train_model(train_samples, train_phenotypes, outdir,
                 learning_rate=None, coeff_l1=0, coeff_l2=1e-4, dropout='auto', dropout_p=.5,
                 max_epochs=20, patience=5,
                 dendrogram_cutoff=0.4, accur_thres=.95, verbose=1):
-
     """ Performs a CellCnn analysis """
+
+    mtl = False
+    if any(isinstance(item, np.ndarray) for item in train_phenotypes):  ### is list of lists ?
+        train_phenotypes_2 = train_phenotypes[1]
+        train_phenotypes = train_phenotypes[0]
+        mtl = True
+
+    ### if you pass in valid train valid phenos should be given as well
+    if any(isinstance(item, np.ndarray) for item in valid_phenotypes):  ### is list of lists ?
+        valid_phenotypes_2 = valid_phenotypes[1]
+        valid_phenotypes = valid_phenotypes[0]
 
     if maxpool_percentages is None:
         maxpool_percentages = [0.01, 1., 5., 20., 100.]
@@ -253,6 +262,7 @@ def train_model(train_samples, train_phenotypes, outdir,
     if valid_samples is not None:
         valid_samples = copy.deepcopy(valid_samples)
 
+    ### todo mtl
     # normalize extreme values
     # we assume that 0 corresponds to the control class
     if subset_selection == 'outlier':
@@ -267,14 +277,15 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     # merge all input samples (X_train, X_valid)
     # and generate an identifier for each of them (train_id, valid_id)
-    train_sample_ids = np.arange(len(train_phenotypes))
+    train_sample_ids = np.arange(len(train_phenotypes)) ## todo mtl check, the ids are just
+    train_sample_ids_2 = np.arange(len(train_phenotypes_2)) ## todo mtl check, the ids are just
     if (valid_samples is None) and (not generate_valid_set):
-
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
 
     elif (valid_samples is None) and generate_valid_set:
         X, sample_id = combine_samples(train_samples, train_sample_ids)
         valid_phenotypes = train_phenotypes
+        valid_phenotypes_2 = train_phenotypes_2
 
         # split into train-validation partitions
         eval_folds = 5
@@ -284,10 +295,12 @@ def train_model(train_samples, train_phenotypes, outdir,
         X_valid, id_valid = X[valid_indices], sample_id[valid_indices]
 
     else:
+        # todo mtl check if ids are equal anyways... -> yep ...
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
         valid_sample_ids = np.arange(len(valid_phenotypes))
         X_valid, id_valid = combine_samples(valid_samples, valid_sample_ids)
 
+    ### todo mtl
     if quant_normed:
         z_scaler = StandardScaler(with_mean=True, with_std=False)
         z_scaler.fit(0.5 * np.ones((1, X_train.shape[1])))
@@ -301,6 +314,7 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     X_train, id_train = shuffle(X_train, id_train)
     train_phenotypes = np.asarray(train_phenotypes)
+    train_phenotypes_2 = np.asarray(train_phenotypes_2)
 
     # an array containing the phenotype for each single cell
     y_train = train_phenotypes[id_train]
@@ -311,7 +325,9 @@ def train_model(train_samples, train_phenotypes, outdir,
 
         X_valid, id_valid = shuffle(X_valid, id_valid)
         valid_phenotypes = np.asarray(valid_phenotypes)
+        valid_phenotypes_2 = np.asarray(valid_phenotypes_2)
         y_valid = valid_phenotypes[id_valid]
+        y_valid_2 = valid_phenotypes_2[id_valid]
 
     # number of measured markers
     nmark = X_train.shape[1]
@@ -319,6 +335,7 @@ def train_model(train_samples, train_phenotypes, outdir,
     # generate multi-cell inputs
     logger.info("Generating multi-cell inputs...")
 
+    #todo mtl
     if subset_selection == 'outlier':
         # here we assume that class 0 is always the control class
         x_ctrl_train = X_train[y_train == 0]
@@ -367,13 +384,16 @@ def train_model(train_samples, train_phenotypes, outdir,
             y_tr = y_tr[cut:]
     else:
         # generate 'nsubset' multi-cell inputs per input sample
-        if per_sample:
-            X_tr, y_tr = generate_subsets(X_train, train_phenotypes, id_train,
+        if per_sample: # for regression
+            X_tr, y_tr = generate_subsets_mtl(X_train, [train_phenotypes, train_phenotypes_2], id_train,
                                           nsubset, ncell, per_sample)
+
             if (valid_samples is not None) or generate_valid_set:
-                X_v, y_v = generate_subsets(X_valid, valid_phenotypes, id_valid,
+                X_v, y_v = generate_subsets_mtl(X_valid, [valid_phenotypes, valid_phenotypes_2], id_valid,
                                             nsubset, ncell, per_sample)
+
         # generate 'nsubset' multi-cell inputs per class
+        ### todo class
         else:
             nsubset_list = []
             for pheno in range(len(np.unique(train_phenotypes))):
@@ -398,13 +418,14 @@ def train_model(train_samples, train_phenotypes, outdir,
     X_v = np.swapaxes(X_v, 2, 1)
     n_classes = 1
 
-    if not regression:
+    if not regression: ### todo mtl class
         n_classes = len(np.unique(train_phenotypes))
         y_tr = keras.utils.to_categorical(y_tr, n_classes)
         y_v = keras.utils.to_categorical(y_v, n_classes)
 
     # train some neural networks with different parameter configurations
     accuracies = np.zeros(nrun)
+    frequency_loss = np.zeros(nrun)
     w_store = dict()
     config = dict()
     config['nfilter'] = []
@@ -433,24 +454,25 @@ def train_model(train_samples, train_phenotypes, outdir,
         # build the neural network
         model = build_model(ncell, nmark, nfilter,
                             coeff_l1, coeff_l2, k,
-                            dropout, dropout_p, regression, n_classes, lr)
+                            dropout, dropout_p, regression, n_classes, lr, mtl=mtl)
 
         filepath = os.path.join(outdir, 'nnet_run_%d.hdf5' % irun)
         try:
-            if not regression:
+            if not regression: ### todo class
                 check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
                                                   mode='auto')
                 earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
-                model.fit(X_tr, y_tr,
+                model.fit(X_tr, *y_tr,
                           epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
-                          validation_data=(X_v, y_v), verbose=verbose)
-            else:
+                          validation_data=(X_v, [*y_v]), verbose=verbose)
+            else: # regression
                 check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
                                                   mode='auto')
                 earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
-                model.fit(X_tr, y_tr,
+                test = np.array([y_tr[0], y_tr[1]])
+                model.fit(X_tr, [y_tr[0], y_tr[1]],
                           epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
-                          validation_data=(X_v, y_v), verbose=verbose)
+                          validation_data=(X_v, [y_v[0], y_v[1]]), verbose=verbose)
 
             # load the model from the epoch with highest validation accuracy
             model.load_weights(filepath)
@@ -460,12 +482,19 @@ def train_model(train_samples, train_phenotypes, outdir,
                 logger.info(f"Best validation accuracy: {valid_metric:.2f}")
                 accuracies[irun] = valid_metric
 
-            else:
-                train_metric = model.evaluate(X_tr, y_tr, batch_size=bs)
-                logger.info(f"Best train loss: {train_metric:.2f}")
-                valid_metric = model.evaluate(X_v, y_v, batch_size=bs)
-                logger.info(f"Best validation loss: {valid_metric:.2f}")
-                accuracies[irun] = - valid_metric
+            else: #### todo make extensible
+                train_metric = model.evaluate(X_tr, [y_tr[0], y_tr[1]], batch_size=bs)
+                logger.info(f"Best train tot. loss: {train_metric[0]}")
+                logger.info(f"out 1. loss: {train_metric[1]}")
+                logger.info(f"out 2. loss: {train_metric[2]}")
+
+                valid_metric = model.evaluate(X_v, [y_v[0], y_v[1]], batch_size=bs)
+                logger.info(f"Best valid tot. loss: {valid_metric[0]}")
+                logger.info(f"out 1. loss: {valid_metric[1]}")
+                logger.info(f"out 2. loss: {valid_metric[2]}")
+
+                accuracies[irun] = - valid_metric[0]
+                frequency_loss[irun] = - valid_metric[2]
 
             # extract the network parameters
             w_store[irun] = model.get_weights()
@@ -475,6 +504,7 @@ def train_model(train_samples, train_phenotypes, outdir,
             sys.stderr.write(str(e) + '\n')
 
     # the top 3 performing networks
+    ### todo maybe embed the freq performance as well ???
     model_sorted_idx = np.argsort(accuracies)[::-1][:3]
     best_3_nets = [w_store[i] for i in model_sorted_idx]
     best_net = best_3_nets[0]
@@ -500,12 +530,17 @@ def train_model(train_samples, train_phenotypes, outdir,
         'n_classes': n_classes
     }
 
+    ### todo nochmals nachlesen was tau war
     if (valid_samples is not None) and (w_cons is not None):
         maxpool_percentage = config['maxpool_percentage'][best_accuracy_idx]
         if regression:
             tau = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotypes,
                                          maxpool_percentage)
+            ### z-scaler = StandardScaler,
+            tau_2 = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotypes_2,
+                                         maxpool_percentage)
             results['filter_tau'] = tau
+            results['filter_tau_freq'] = tau_2
 
         else:
             filter_diff = get_filters_classification(w_cons, z_scaler, valid_samples,
@@ -515,7 +550,7 @@ def train_model(train_samples, train_phenotypes, outdir,
 
 
 def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
-                k, dropout, dropout_p, regression, n_classes, lr=0.01):
+                k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl=False):
     """ Builds the neural network architecture """
 
     # the input layer
@@ -537,6 +572,7 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
         pooled = layers.Dropout(rate=dropout_p)(pooled)
 
     # network prediction output
+    ### todo mtl class
     if not regression:
         output = layers.Dense(units=n_classes,
                               activation='softmax',
@@ -548,16 +584,33 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                               activation='linear',
                               kernel_initializer=initializers.RandomUniform(),
                               kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
-                              name='output')(pooled)
-    model = keras.Model(inputs=data_input, outputs=output)
+                              name='output_desease')(pooled)
 
+    if mtl:
+        # todo make this extensible for several classes
+        ### this is the dummy for the freq regression for class this must be softmax as activation
+        output_freq = layers.Dense(units=1,
+                                   activation='linear',
+                                   kernel_initializer=initializers.RandomUniform(),
+                                   kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
+                                   name='output_freq')(pooled)
+        model = keras.Model(inputs=data_input, outputs=[output, output_freq])
+    else:
+        model = keras.Model(inputs=data_input, outputs=output)
+
+    ### todo modify loss functions here
     if not regression:
         model.compile(optimizer=optimizers.Adam(learning_rate=lr),
                       loss='categorical_crossentropy',
                       metrics=['accuracy'])
     else:
-        model.compile(optimizer=optimizers.Adam(learning_rate=lr),
-                      loss='mean_squared_error')
+        # todo here i might need to add n * mse
+        if mtl:
+            model.compile(optimizer=optimizers.Adam(learning_rate=lr),
+                      loss=['mean_squared_error', 'mean_squared_error'])
+        else:
+            model.compile(optimizer=optimizers.Adam(learning_rate=lr),
+                          loss=['mean_squared_error'])
     return model
 
 
