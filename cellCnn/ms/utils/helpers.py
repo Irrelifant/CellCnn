@@ -62,8 +62,8 @@ def get_chunks_from_df_mtl(patient_df, freq_df, desease_state=0, clusters=None, 
                 else:  # when it is less then the batchsize i cut the patients data AND add it to the chunks
                     cut = rest_size - len(data)
 
-                    candidates.append(data[:len(data)-cut])
-                    proportion = len(data[:len(data)-cut]) / batch_size
+                    candidates.append(data[:len(data) - cut])
+                    proportion = len(data[:len(data) - cut]) / batch_size
                     freq = freq + proportion * freq_df  # mal schaun ob des geht
 
                     # todo add to junks
@@ -84,7 +84,8 @@ def get_chunks_from_df_mtl(patient_df, freq_df, desease_state=0, clusters=None, 
                         cell_types = df
 
                     selection = cell_types.loc[:, cell_types.columns != 'cluster']  # to get 'cluster' out
-                    all_freqs = freq_df[patient]  # this saves ALL freq of that patient -> maybe reduce it to only the clusters
+                    all_freqs = freq_df[
+                        patient]  # this saves ALL freq of that patient -> maybe reduce it to only the clusters
                     selection_pool.append((selection, all_freqs, desease_state))
     return selection_pool, too_few_data
 
@@ -123,14 +124,15 @@ def calc_frequencies(df, ref_dict, freq_col='cluster', return_list=False):
         return list(frequency_dict.values())
     return frequency_dict
 
-def split_test_train_valid(*args, train_perc=0.8, test_perc=0.2,  valid_perc=0.5, seed=123):
+
+def split_test_train_valid(*args, train_perc=0.8, test_perc=0.2, valid_perc=0.5, seed=123):
     results = dict()
     for i, value in enumerate(args):
         length = len(value)
-        results[f'{i}_test'] = value[:int(test_perc*length)]
-        results[f'{i}_train'] = value[int(test_perc*length):]
-        results[f'{i}_valid'] = results[f'{i}_test'][int(valid_perc*len(results[f'{i}_test'])):]
-        results[f'{i}_test'] = results[f'{i}_test'][:int(valid_perc*len(results[f'{i}_test']))]
+        results[f'{i}_test'] = value[:int(test_perc * length)]
+        results[f'{i}_train'] = value[int(test_perc * length):]
+        results[f'{i}_valid'] = results[f'{i}_test'][int(valid_perc * len(results[f'{i}_test'])):]
+        results[f'{i}_test'] = results[f'{i}_test'][:int(valid_perc * len(results[f'{i}_test']))]
 
     return results.values()
 
@@ -155,7 +157,7 @@ def get_fitted_model(X_train, X_valid, y_train, y_valid,
                      nrun=15, ncell=200, nsubset=1000, nfilters=[3],
                      coeff_l2=0.0001, coeff_l1=0, max_epochs=50, learning_rate=None,
                      outdir='default_output_dir',
-                     per_sample=True, regression=True, verbose=True):
+                     per_sample=True, regression=True, verbose=True, result=False, mtl_tasks=1):
     ### for Pycharm i need to update the CellCNN model EVERY TIME I CHANGE stuff
     import importlib
     importlib.reload(cellCnn)
@@ -164,19 +166,15 @@ def get_fitted_model(X_train, X_valid, y_train, y_valid,
     ## parameters from PBMC example
     ###per_sample bei regression
 
-    mtl = False
-    if any(isinstance(item, list) for item in y_train):  ### is list of lists ?
-        mtl = True
-
     model = CellCnn(nrun=nrun, ncell=ncell, nsubset=nsubset,
                     nfilter_choice=nfilters, learning_rate=learning_rate,
                     coeff_l2=coeff_l2, coeff_l1=coeff_l1,
                     max_epochs=max_epochs, per_sample=per_sample,
-                    regression=regression, verbose=verbose)
+                    regression=regression, verbose=verbose, mtl_tasks=mtl_tasks)
 
-    model.fit(train_samples=X_train, train_phenotypes=y_train,
-              valid_samples=X_valid, valid_phenotypes=y_valid,
-              outdir=outdir)
+    model = model.fit(train_samples=X_train, train_phenotypes=y_train,
+                      valid_samples=X_valid, valid_phenotypes=y_valid,
+                      outdir=outdir)
     return model
 
 

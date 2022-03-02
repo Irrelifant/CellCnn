@@ -8,6 +8,8 @@ import sys
 import os
 import copy
 import logging
+
+import numpy
 import numpy as np
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
@@ -90,7 +92,7 @@ class CellCnn(object):
                  nfilter_choice=None, dropout='auto', dropout_p=.5,
                  coeff_l1=0, coeff_l2=0.0001, learning_rate=None,
                  regression=False, max_epochs=20, patience=5, nrun=15, dendrogram_cutoff=0.4,
-                 accur_thres=.95, verbose=1):
+                 accur_thres=.95, verbose=1, mtl_tasks=1):
 
         # initialize model attributes
         self.scale = scale
@@ -114,6 +116,7 @@ class CellCnn(object):
         self.accur_thres = accur_thres
         self.verbose = verbose
         self.results = None
+        self.mtl_tasks = mtl_tasks
 
     def fit(self, train_samples, train_phenotypes, outdir, valid_samples=None,
             valid_phenotypes=None, generate_valid_set=True):
@@ -164,12 +167,13 @@ class CellCnn(object):
                           dropout=self.dropout, dropout_p=self.dropout_p,
                           max_epochs=self.max_epochs,
                           patience=self.patience, dendrogram_cutoff=self.dendrogram_cutoff,
-                          accur_thres=self.accur_thres, verbose=self.verbose)
+                          accur_thres=self.accur_thres, verbose=self.verbose, mtl_tasks=self.mtl_tasks)
         self.results = res
         return self
 
     def predict(self, new_samples, ncell_per_sample=None):
         """ Makes predictions for new samples.
+            Takes the mean of the best 3 nets´ predictions and return it for
 
         Args:
             - new_samples :
@@ -180,9 +184,9 @@ class CellCnn(object):
                 minimum size in `new_samples`.
 
         Returns:
-            y_pred : Phenotype predictions for `new_samples`.
+            y_pred : Phenotype predictions for `new_samples`. OR for mtl_tasks > 1 predictions for all multi-task
+             learning tasks in the order that labels have been given in
         """
-
         if ncell_per_sample is None:
             ncell_per_sample = np.min([x.shape[0] for x in new_samples])
         logger.info(f"Predictions based on multi-cell inputs containing {ncell_per_sample} cells.")
@@ -201,7 +205,12 @@ class CellCnn(object):
         sorted_idx = np.argsort(accuracies)[::-1][:3]
         config = self.results['config']
 
-        y_pred = np.zeros((3, len(new_samples), n_classes))
+        #y_pred = np.zeros((3, len(new_samples), n_classes))
+        if self.mtl_tasks == 1:
+            y_pred = np.zeros((3, len(new_samples), n_classes))
+        else:
+            y_pred = np.zeros((3, self.mtl_tasks, len(new_samples), n_classes))
+        # todo later define it would i even predefine it ?
         for i_enum, i in enumerate(sorted_idx):
             nfilter = config['nfilter'][i]
             maxpool_percentage = config['maxpool_percentage'][i]
@@ -211,18 +220,34 @@ class CellCnn(object):
             model = build_model(ncell_per_sample, nmark,
                                 nfilter=nfilter, coeff_l1=0, coeff_l2=0,
                                 k=ncell_pooled, dropout=False, dropout_p=0,
-                                regression=self.regression, n_classes=n_classes, lr=0.01)
-
+                                regression=self.regression, n_classes=n_classes, lr=0.01, mtl_tasks=self.mtl_tasks)
             # and load the learned filter and output weights
             weights = self.results['best_3_nets'][i_enum]
             model.set_weights(weights)
+            #        weights: a list of Numpy arrays. The number of arrays and their shape
+            # must match number of the dimensions of the weights of the optimizer
+            # (i.e. it should match the output of `get_weights`).
 
             # select a random subset of `ncell_per_sample` and make predictions
             new_samples = [shuffle(x)[:ncell_per_sample].reshape(1, ncell_per_sample, nmark)
                            for x in new_samples]
             data_test = np.vstack(new_samples)
+            # todo  problems with the shape here, make dynamic for an mtl set tonr of mtl_tasks
             y_pred[i_enum] = model.predict(data_test)
-        return np.mean(y_pred, axis=0)
+
+        if self.mtl_tasks == 1:
+            result = np.mean(y_pred, axis=0)
+        else:
+            result = []
+            for task_nr in range(self.mtl_tasks):
+                to_mean = []
+                for idx, pred in enumerate(y_pred):
+                    test = pred[task_nr]
+                    to_mean.append(test)
+                mean = np.mean(np.array(to_mean), axis=0)
+                result.append(mean)
+        return result
+    #        test = np.zeros((3, self.mtl_tasks, len(new_samples), n_classes))
 
 
 def train_model(train_samples, train_phenotypes, outdir,
@@ -232,14 +257,15 @@ def train_model(train_samples, train_phenotypes, outdir,
                 maxpool_percentages=None, nfilter_choice=None,
                 learning_rate=None, coeff_l1=0, coeff_l2=1e-4, dropout='auto', dropout_p=.5,
                 max_epochs=20, patience=5,
-                dendrogram_cutoff=0.4, accur_thres=.95, verbose=1):
+                dendrogram_cutoff=0.4, accur_thres=.95, verbose=1, mtl_tasks=1):
     """ Performs a CellCnn analysis """
 
-    mtl = False
     if any(isinstance(item, np.ndarray) for item in train_phenotypes):  ### is list of lists ?
+        if mtl_tasks != len(train_phenotypes):
+            sys.stderr.write('"mtl_tasks" must be the length of the "train_phenotypes" list.\n')
+        #todo make it extendable
         train_phenotypes_2 = train_phenotypes[1]
         train_phenotypes = train_phenotypes[0]
-        mtl = True
 
     ### if you pass in valid train valid phenos should be given as well
     if any(isinstance(item, np.ndarray) for item in valid_phenotypes):  ### is list of lists ?
@@ -277,8 +303,7 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     # merge all input samples (X_train, X_valid)
     # and generate an identifier for each of them (train_id, valid_id)
-    train_sample_ids = np.arange(len(train_phenotypes)) ## todo mtl check, the ids are just
-    train_sample_ids_2 = np.arange(len(train_phenotypes_2)) ## todo mtl check, the ids are just
+    train_sample_ids = np.arange(len(train_phenotypes))  ## todo mtl check, the ids are just
     if (valid_samples is None) and (not generate_valid_set):
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
 
@@ -295,7 +320,6 @@ def train_model(train_samples, train_phenotypes, outdir,
         X_valid, id_valid = X[valid_indices], sample_id[valid_indices]
 
     else:
-        # todo mtl check if ids are equal anyways... -> yep ...
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
         valid_sample_ids = np.arange(len(valid_phenotypes))
         X_valid, id_valid = combine_samples(valid_samples, valid_sample_ids)
@@ -335,7 +359,7 @@ def train_model(train_samples, train_phenotypes, outdir,
     # generate multi-cell inputs
     logger.info("Generating multi-cell inputs...")
 
-    #todo mtl
+    # todo mtl
     if subset_selection == 'outlier':
         # here we assume that class 0 is always the control class
         x_ctrl_train = X_train[y_train == 0]
@@ -384,13 +408,13 @@ def train_model(train_samples, train_phenotypes, outdir,
             y_tr = y_tr[cut:]
     else:
         # generate 'nsubset' multi-cell inputs per input sample
-        if per_sample: # for regression
+        if per_sample:  # for regression
             X_tr, y_tr = generate_subsets_mtl(X_train, [train_phenotypes, train_phenotypes_2], id_train,
-                                          nsubset, ncell, per_sample)
+                                              nsubset, ncell, per_sample)
 
             if (valid_samples is not None) or generate_valid_set:
                 X_v, y_v = generate_subsets_mtl(X_valid, [valid_phenotypes, valid_phenotypes_2], id_valid,
-                                            nsubset, ncell, per_sample)
+                                                nsubset, ncell, per_sample)
 
         # generate 'nsubset' multi-cell inputs per class
         ### todo class
@@ -418,7 +442,7 @@ def train_model(train_samples, train_phenotypes, outdir,
     X_v = np.swapaxes(X_v, 2, 1)
     n_classes = 1
 
-    if not regression: ### todo mtl class
+    if not regression:  ### todo mtl class
         n_classes = len(np.unique(train_phenotypes))
         y_tr = keras.utils.to_categorical(y_tr, n_classes)
         y_v = keras.utils.to_categorical(y_v, n_classes)
@@ -454,18 +478,18 @@ def train_model(train_samples, train_phenotypes, outdir,
         # build the neural network
         model = build_model(ncell, nmark, nfilter,
                             coeff_l1, coeff_l2, k,
-                            dropout, dropout_p, regression, n_classes, lr, mtl=mtl)
+                            dropout, dropout_p, regression, n_classes, lr, mtl_tasks=mtl_tasks)
 
         filepath = os.path.join(outdir, 'nnet_run_%d.hdf5' % irun)
         try:
-            if not regression: ### todo class
+            if not regression:  ### todo class
                 check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
                                                   mode='auto')
                 earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
                 model.fit(X_tr, *y_tr,
                           epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
                           validation_data=(X_v, [*y_v]), verbose=verbose)
-            else: # regression
+            else:  # regression
                 check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
                                                   mode='auto')
                 earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
@@ -482,7 +506,8 @@ def train_model(train_samples, train_phenotypes, outdir,
                 logger.info(f"Best validation accuracy: {valid_metric:.2f}")
                 accuracies[irun] = valid_metric
 
-            else: #### todo make extensible
+            else:  #### todo make extensible
+                #todo check if output maybe if from 3 nets and not what i expect
                 train_metric = model.evaluate(X_tr, [y_tr[0], y_tr[1]], batch_size=bs)
                 logger.info(f"Best train tot. loss: {train_metric[0]}")
                 logger.info(f"out 1. loss: {train_metric[1]}")
@@ -538,7 +563,7 @@ def train_model(train_samples, train_phenotypes, outdir,
                                          maxpool_percentage)
             ### z-scaler = StandardScaler,
             tau_2 = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotypes_2,
-                                         maxpool_percentage)
+                                           maxpool_percentage)
             results['filter_tau'] = tau
             results['filter_tau_freq'] = tau_2
 
@@ -550,7 +575,7 @@ def train_model(train_samples, train_phenotypes, outdir,
 
 
 def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
-                k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl=False):
+                k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl_tasks=1):
     """ Builds the neural network architecture """
 
     # the input layer
@@ -586,7 +611,9 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                               kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
                               name='output_desease')(pooled)
 
-    if mtl:
+    if mtl_tasks == 1:
+        model = keras.Model(inputs=data_input, outputs=output)
+    else:
         # todo make this extensible for several classes
         ### this is the dummy for the freq regression for class this must be softmax as activation
         output_freq = layers.Dense(units=1,
@@ -595,8 +622,6 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                                    kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
                                    name='output_freq')(pooled)
         model = keras.Model(inputs=data_input, outputs=[output, output_freq])
-    else:
-        model = keras.Model(inputs=data_input, outputs=output)
 
     ### todo modify loss functions here
     if not regression:
@@ -605,12 +630,12 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                       metrics=['accuracy'])
     else:
         # todo here i might need to add n * mse
-        if mtl:
-            model.compile(optimizer=optimizers.Adam(learning_rate=lr),
-                      loss=['mean_squared_error', 'mean_squared_error'])
-        else:
+        if mtl_tasks == 1:
             model.compile(optimizer=optimizers.Adam(learning_rate=lr),
                           loss=['mean_squared_error'])
+        else:
+            model.compile(optimizer=optimizers.Adam(learning_rate=lr),
+                          loss=['mean_squared_error', 'mean_squared_error'])
     return model
 
 
