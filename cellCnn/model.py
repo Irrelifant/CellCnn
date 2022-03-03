@@ -8,6 +8,7 @@ import sys
 import os
 import copy
 import logging
+from collections import OrderedDict
 
 import numpy
 import numpy as np
@@ -23,7 +24,7 @@ from cellCnn.utils import mkdir_p
 
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers, initializers, regularizers, optimizers, callbacks
+from tensorflow.keras import layers, initializers, regularizers, optimizers, callbacks, losses
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,7 @@ class CellCnn(object):
         sorted_idx = np.argsort(accuracies)[::-1][:3]
         config = self.results['config']
 
-        #y_pred = np.zeros((3, len(new_samples), n_classes))
+        # y_pred = np.zeros((3, len(new_samples), n_classes))
         if self.mtl_tasks == 1:
             y_pred = np.zeros((3, len(new_samples), n_classes))
         else:
@@ -260,17 +261,21 @@ def train_model(train_samples, train_phenotypes, outdir,
                 dendrogram_cutoff=0.4, accur_thres=.95, verbose=1, mtl_tasks=1):
     """ Performs a CellCnn analysis """
 
+    train_phenotype_dict = OrderedDict()
+    valid_phenotype_dict = OrderedDict()
     if any(isinstance(item, np.ndarray) for item in train_phenotypes):  ### is list of lists ?
         if mtl_tasks != len(train_phenotypes):
             sys.stderr.write('"mtl_tasks" must be the length of the "train_phenotypes" list.\n')
-        #todo make it extendable
-        train_phenotypes_2 = train_phenotypes[1]
-        train_phenotypes = train_phenotypes[0]
+
+        for task in range(mtl_tasks):
+            train_phenotype_dict[task] = train_phenotypes[task]
+    else:
+        train_phenotype_dict[0] = train_phenotypes
 
     ### if you pass in valid train valid phenos should be given as well
     if any(isinstance(item, np.ndarray) for item in valid_phenotypes):  ### is list of lists ?
-        valid_phenotypes_2 = valid_phenotypes[1]
-        valid_phenotypes = valid_phenotypes[0]
+        for task in range(mtl_tasks):
+            valid_phenotype_dict[task] = valid_phenotypes[task]
 
     if maxpool_percentages is None:
         maxpool_percentages = [0.01, 1., 5., 20., 100.]
@@ -309,8 +314,9 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     elif (valid_samples is None) and generate_valid_set:
         X, sample_id = combine_samples(train_samples, train_sample_ids)
-        valid_phenotypes = train_phenotypes
-        valid_phenotypes_2 = train_phenotypes_2
+
+        for task in range(mtl_tasks):
+            valid_phenotype_dict[task] = train_phenotype_dict[task]
 
         # split into train-validation partitions
         eval_folds = 5
@@ -321,7 +327,8 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     else:
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
-        valid_sample_ids = np.arange(len(valid_phenotypes))
+        valid_phenotype_dict[0] = valid_phenotypes # this happens only when we are in stl with 1 valid sample
+        valid_sample_ids = np.arange(len(valid_phenotype_dict[0]))
         X_valid, id_valid = combine_samples(valid_samples, valid_sample_ids)
 
     ### todo mtl
@@ -337,10 +344,12 @@ def train_model(train_samples, train_phenotypes, outdir,
         z_scaler = None
 
     X_train, id_train = shuffle(X_train, id_train)
-    train_phenotypes = np.asarray(train_phenotypes)
-    train_phenotypes_2 = np.asarray(train_phenotypes_2)
+
+    for task in range(mtl_tasks):
+        train_phenotype_dict[task] = np.asarray(train_phenotype_dict[task])
 
     # an array containing the phenotype for each single cell
+    # # todo check if i need y_train several times -> für outlier
     y_train = train_phenotypes[id_train]
 
     if (valid_samples is not None) or generate_valid_set:
@@ -348,10 +357,10 @@ def train_model(train_samples, train_phenotypes, outdir,
             X_valid = z_scaler.transform(X_valid)
 
         X_valid, id_valid = shuffle(X_valid, id_valid)
-        valid_phenotypes = np.asarray(valid_phenotypes)
-        valid_phenotypes_2 = np.asarray(valid_phenotypes_2)
-        y_valid = valid_phenotypes[id_valid]
-        y_valid_2 = valid_phenotypes_2[id_valid]
+
+        for task in range(mtl_tasks):
+            valid_phenotype_dict[task] =  np.asarray(valid_phenotype_dict[task])
+        y_valid = valid_phenotypes[id_valid]  # todo check if i need y_valid several times -> outlier
 
     # number of measured markers
     nmark = X_train.shape[1]
@@ -409,11 +418,13 @@ def train_model(train_samples, train_phenotypes, outdir,
     else:
         # generate 'nsubset' multi-cell inputs per input sample
         if per_sample:  # for regression
-            X_tr, y_tr = generate_subsets_mtl(X_train, [train_phenotypes, train_phenotypes_2], id_train,
+            y_inputs_train = train_phenotype_dict.values()
+            X_tr, y_tr = generate_subsets_mtl(X_train, y_inputs_train, id_train,
                                               nsubset, ncell, per_sample)
 
             if (valid_samples is not None) or generate_valid_set:
-                X_v, y_v = generate_subsets_mtl(X_valid, [valid_phenotypes, valid_phenotypes_2], id_valid,
+                y_inputs_valid = valid_phenotype_dict.values()
+                X_v, y_v = generate_subsets_mtl(X_valid, y_inputs_valid, id_valid,
                                                 nsubset, ncell, per_sample)
 
         # generate 'nsubset' multi-cell inputs per class
@@ -493,10 +504,11 @@ def train_model(train_samples, train_phenotypes, outdir,
                 check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
                                                   mode='auto')
                 earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
-                test = np.array([y_tr[0], y_tr[1]])
-                model.fit(X_tr, [y_tr[0], y_tr[1]],
+                y_trains = [y_tr[task] for task in range(mtl_tasks)]
+                y_valids = [y_v[task] for task in range(mtl_tasks)]
+                model.fit(X_tr, *y_trains,
                           epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
-                          validation_data=(X_v, [y_v[0], y_v[1]]), verbose=verbose)
+                          validation_data=(X_v, *y_valids), verbose=verbose)
 
             # load the model from the epoch with highest validation accuracy
             model.load_weights(filepath)
@@ -507,19 +519,26 @@ def train_model(train_samples, train_phenotypes, outdir,
                 accuracies[irun] = valid_metric
 
             else:  #### todo make extensible
-                #todo check if output maybe if from 3 nets and not what i expect
-                train_metric = model.evaluate(X_tr, [y_tr[0], y_tr[1]], batch_size=bs)
-                logger.info(f"Best train tot. loss: {train_metric[0]}")
-                logger.info(f"out 1. loss: {train_metric[1]}")
-                logger.info(f"out 2. loss: {train_metric[2]}")
+                # todo check if output maybe if from 3 nets and not what i expect
 
-                valid_metric = model.evaluate(X_v, [y_v[0], y_v[1]], batch_size=bs)
-                logger.info(f"Best valid tot. loss: {valid_metric[0]}")
-                logger.info(f"out 1. loss: {valid_metric[1]}")
-                logger.info(f"out 2. loss: {valid_metric[2]}")
+                train_metric = model.evaluate(X_tr, [y_tr[task] for task in range(mtl_tasks)], batch_size=bs)
+                valid_metric = model.evaluate(X_v, [y_v[task] for task in range(mtl_tasks)], batch_size=bs)
 
-                accuracies[irun] = - valid_metric[0]
-                frequency_loss[irun] = - valid_metric[2]
+                if mtl_tasks == 1:
+                    logger.info(f"Best train loss: {train_metric}")
+                    logger.info(f"Best valid loss: {valid_metric}")
+                    accuracies[irun] = - valid_metric
+
+                else: #todo make dynamic
+                    logger.info(f"Best train tot. loss: {train_metric[0]}")
+                    logger.info(f"out 1. loss: {train_metric[1]}")
+                    logger.info(f"out 2. loss: {train_metric[2]}")
+                    logger.info(f"Best valid tot. loss: {valid_metric[0]}")
+                    logger.info(f"out 1. loss: {valid_metric[1]}")
+                    logger.info(f"out 2. loss: {valid_metric[2]}")
+
+                    accuracies[irun] = - valid_metric[0]
+                    frequency_loss[irun] = - valid_metric[2]
 
             # extract the network parameters
             w_store[irun] = model.get_weights()
@@ -559,19 +578,26 @@ def train_model(train_samples, train_phenotypes, outdir,
     if (valid_samples is not None) and (w_cons is not None):
         maxpool_percentage = config['maxpool_percentage'][best_accuracy_idx]
         if regression:
-            tau = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotypes,
-                                         maxpool_percentage)
-            ### z-scaler = StandardScaler,
-            tau_2 = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotypes_2,
-                                           maxpool_percentage)
-            results['filter_tau'] = tau
-            results['filter_tau_freq'] = tau_2
+            for task in range(mtl_tasks):
+                tau = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotype_dict[task],
+                                             maxpool_percentage)
+
+                if task == 0:  # this is mainly here for keeping the "old" output the same (STL way)
+                    results['filter_tau'] = tau
+                else:
+                    results[f'filter_tau_{task}'] = tau
 
         else:
             filter_diff = get_filters_classification(w_cons, z_scaler, valid_samples,
                                                      valid_phenotypes, maxpool_percentage)
             results['filter_diff'] = filter_diff
     return results
+
+
+# todo here comes the loss ...
+def revised_uncertainty_loss(y_true, y_pred):
+    mse = tf.keras.losses.MeanSquaredError()
+    pass
 
 
 def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
@@ -635,7 +661,7 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                           loss=['mean_squared_error'])
         else:
             model.compile(optimizer=optimizers.Adam(learning_rate=lr),
-                          loss=['mean_squared_error', 'mean_squared_error'])
+                          loss=revised_uncertainty_loss)
     return model
 
 

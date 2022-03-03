@@ -254,9 +254,9 @@ def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
 
     Xt = np.vstack(data_list)
     yt = np.hstack(y_list)
-    Xt, yt[0], yt[1] = sku.shuffle(Xt, yt[0], yt[1]) # i dont swap this because i want all elements to be shuffled, not just the labels ...
-    yt = np.hstack(y_list)
-    return Xt, yt
+    y_values = [yt[i] for i in range(len(pheno_map))]
+    Xt, *y_args = sku.shuffle(Xt, *y_values) # i dont swap this because i want all elements to be shuffled, not just the labels ...
+    return Xt, y_args
 
 
 def generate_subsets(X, pheno_map, sample_id, nsubsets, ncell,
