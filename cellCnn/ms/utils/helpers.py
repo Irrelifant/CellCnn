@@ -90,20 +90,14 @@ def get_chunks_from_df_mtl(patient_df, freq_df, desease_state=0, clusters=None, 
     return selection_pool, too_few_data
 
 
-def get_chunks_from_df(patient_df, freq_df, desease_state=0, cluster=1, batch_size=100):
-    too_few_data = []
+def get_chunks_from_df(patient_df, freq_df, desease_state=0, batch_size=100):
     selection_pool = []
     for patient, df in patient_df.items():
-        cell_types = df[df['cluster'] == cluster]
-        if len(cell_types) < batch_size:
-            too_few_data.append(df)  # todo maybe merge together several "too few ones"
-            continue
-
-        selection_idx = np.random.choice(cell_types.index, batch_size)
-        selection = cell_types.loc[selection_idx, cell_types.columns != 'cluster']  # to get 'cluster' out
+        selection_idx = np.random.choice(df.index, batch_size)
+        selection = df.loc[selection_idx, df.columns != 'cluster']  # to get 'cluster' out
         all_freqs = freq_df[patient]
         selection_pool.append((selection, all_freqs, desease_state))
-    return selection_pool, too_few_data
+    return selection_pool
 
 
 def get_chunks(idxs, size):
