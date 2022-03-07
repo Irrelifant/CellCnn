@@ -207,12 +207,7 @@ class CellCnn(object):
         config = self.results['config']
 
         # y_pred = np.zeros((3, len(new_samples), n_classes))
-        if self.mtl_tasks == 1:
-            y_pred = np.zeros((3, len(new_samples), n_classes))
-        else:
-            # for classification i get 2 values per prediction and for regression only 1 # todo
-            y_pred = dict()
-        # todo later define it would i even predefine it ?
+        y_pred = dict()
         for i_enum, i in enumerate(sorted_idx):
             nfilter = config['nfilter'][i]
             maxpool_percentage = config['maxpool_percentage'][i]
@@ -249,9 +244,8 @@ class CellCnn(object):
                 mean = np.mean(np.array(to_mean), axis=0)
                 result.append(mean)
         return result
-    #        test = np.zeros((3, self.mtl_tasks, len(new_samples), n_classes))
 
-#todo replace train:pheno nach zuweißung zum dict mit dict[0] um code zu sparen
+# todo make position of classification labels more dynamic
 def train_model(train_samples, train_phenotypes, outdir,
                 valid_samples=None, valid_phenotypes=None, generate_valid_set=True,
                 scale=True, quant_normed=False, nrun=20, regression=False,
@@ -315,10 +309,7 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     # merge all input samples (X_train, X_valid)
     # and generate an identifier for each of them (train_id, valid_id)
-    if mtl_tasks == 1:
-        train_sample_ids = np.arange(len(train_phenotypes))  ## todo mtl check, the ids are just
-    else:
-        train_sample_ids = np.arange(len(train_phenotypes[0]))  ## refers to the sample, not to the unique labels
+    train_sample_ids = np.arange(len(train_phenotype_dict[0]))  ## refers to the sample, not to the unique labels
 
     if (valid_samples is None) and (not generate_valid_set):
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
@@ -336,7 +327,7 @@ def train_model(train_samples, train_phenotypes, outdir,
         X_train, id_train = X[train_indices], sample_id[train_indices]
         X_valid, id_valid = X[valid_indices], sample_id[valid_indices]
 
-    else: # valid samples is NOT None
+    else: # if valid samples is NOT None
         X_train, id_train = combine_samples(train_samples, train_sample_ids)
         valid_sample_ids = np.arange(len(valid_phenotype_dict[0]))
         X_valid, id_valid = combine_samples(valid_samples, valid_sample_ids)
@@ -431,7 +422,6 @@ def train_model(train_samples, train_phenotypes, outdir,
                                                 nsubset, ncell, per_sample)
 
         # generate 'nsubset' multi-cell inputs per class
-        # todo check if we can run it in that mode AND have regression predictions
         else:
             nsubset_list = []
             for pheno in range(len(np.unique(train_phenotype_dict[0]))):
@@ -454,7 +444,6 @@ def train_model(train_samples, train_phenotypes, outdir,
                 X_v, y_v = generate_subsets_mtl(X_valid, valid_phenotype_dict[0], id_valid,
                                                 nsubset_list, ncell, per_sample)
 
-                # todo check id_train
                 for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
                     input_subsets = int(len(X_v) / len(valid_phenotype_dict[0]))
                     _, y_v_task = generate_subsets_mtl(X_train, valid_phenotype_dict[task_nr], id_valid,
@@ -514,35 +503,38 @@ def train_model(train_samples, train_phenotypes, outdir,
             check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True, mode='auto')
             earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
 
-            if mtl_tasks == 1:
-                model.fit(X_tr, y_tr[0],
-                          epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
-                          validation_data=(X_v, y_v[0]), verbose=verbose)
-            else:
-                y_trains = [y_tr[task] for task in range(mtl_tasks)]
-                y_valids = [y_v[task] for task in range(mtl_tasks)]
-                model.fit(X_tr, [*y_trains],
-                          epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
-                          validation_data=(X_v, [*y_valids]), verbose=verbose)
+            # if mtl_tasks == 1:
+            #     model.fit(X_tr, y_tr[0],
+            #               epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
+            #               validation_data=(X_v, y_v[0]), verbose=verbose)
+            # else:
+            y_trains = [y_tr[task] for task in range(mtl_tasks)]
+            y_valids = [y_v[task] for task in range(mtl_tasks)]
+            model.fit(X_tr, [*y_trains],
+                      epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
+                      validation_data=(X_v, [*y_valids]), verbose=verbose)
 
             # load the model from the epoch with highest validation accuracy
             model.load_weights(filepath)
 
             if not regression:
-                if mtl_tasks == 1:
-                    valid_metric = model.evaluate(X_v, y_v)[-1]
-                    logger.info(f"Best validation accuracy: {valid_metric:.2f}")
-                    accuracies[irun] = valid_metric
-                else:
-                    valid_metric = model.evaluate(X_v, [y_v[task] for task in range(mtl_tasks)], batch_size=bs)
-                    logger.info(f"Best validation accuracy: {valid_metric[0]:.2f}")
-                    accuracies[irun] = valid_metric[0]
-                    # take the one for phenotype task
-                    for task in range(1, mtl_tasks):
-                        logger.info(f"out {task} loss: {valid_metric[task]}")
+                # if mtl_tasks == 1:
+                #     valid_metric = model.evaluate(X_v, y_v)[-1]
+                #     logger.info(f"Best validation accuracy: {valid_metric:.2f}")
+                #     accuracies[irun] = valid_metric
+                # else:
+                valid_metric_results = dict()
+                valid_metric = model.evaluate(X_v, [y_v[task] for task in range(mtl_tasks)])[-1]
+                if not isinstance(valid_metric, list):
+                    valid_metric_results[0] = valid_metric
+                logger.info(f"Best validation accuracy: {valid_metric_results[0]:.2f}")
+                accuracies[irun] = valid_metric_results[0]
+
+                # take the one for phenotype task
+                for task in range(1, mtl_tasks):
+                    logger.info(f"out {task} loss: {valid_metric[task]}")
 
             else:
-                # todo check if output maybe if from 3 nets and not what i expect
                 train_metric = model.evaluate(X_tr, [y_tr[task] for task in range(mtl_tasks)], batch_size=bs)
                 valid_metric = model.evaluate(X_v, [y_v[task] for task in range(mtl_tasks)], batch_size=bs)
 
@@ -550,7 +542,7 @@ def train_model(train_samples, train_phenotypes, outdir,
                     logger.info(f"Best train loss: {train_metric}")
                     logger.info(f"Best valid loss: {valid_metric}")
                     accuracies[irun] = - valid_metric
-                else:  # todo make dynamic
+                else:
                     logger.info(f"Best train tot. loss: {train_metric[0]}")
                     logger.info(f"Best valid tot. loss: {valid_metric[0]}")
                     accuracies[irun] = - valid_metric[0]
@@ -596,7 +588,6 @@ def train_model(train_samples, train_phenotypes, outdir,
         'n_classes': n_classes
     }
 
-    ### todo nochmals nachlesen was tau war
     if (valid_samples is not None) and (w_cons is not None):
         maxpool_percentage = config['maxpool_percentage'][best_accuracy_idx]
         if regression:
