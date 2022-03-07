@@ -124,9 +124,9 @@ def split_test_train_valid(*args, train_perc=0.8, test_perc=0.2, valid_perc=0.5,
     for i, value in enumerate(args):
         length = len(value)
         results[f'{i}_test'] = value[:int(test_perc * length)]
-        results[f'{i}_train'] = value[int(test_perc * length):]
-        results[f'{i}_valid'] = results[f'{i}_test'][int(valid_perc * len(results[f'{i}_test'])):]
-        results[f'{i}_test'] = results[f'{i}_test'][:int(valid_perc * len(results[f'{i}_test']))]
+        results[f'{i}_train'] = np.asarray(value[int(test_perc * length):])
+        results[f'{i}_valid'] = np.asarray(results[f'{i}_test'][int(valid_perc * len(results[f'{i}_test'])):])
+        results[f'{i}_test'] = np.asarray(results[f'{i}_test'][:int(valid_perc * len(results[f'{i}_test']))])
 
     return results.values()
 

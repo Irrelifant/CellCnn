@@ -226,9 +226,8 @@ def per_sample_subsets(X, nsubsets, ncell_per_subset, k_init=False):
 
 
 # todo pheno map is a list of the prev pheno map now!
-# todo make adaptive to stl and mtl >1 tasks
 def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
-                         per_sample=False, k_init=False):
+                         per_sample=False, k_init=False, mtl_tasks=1):
 
     S = dict() # dict aller label zu subsets per sample
     n_out = len(np.unique(sample_id))
@@ -238,9 +237,8 @@ def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
         # regression
         if per_sample:
             S[ylabel] = per_sample_subsets(X_i, nsubsets, ncell, k_init)
-        # todo class mtl
         else:
-            n = nsubsets[pheno_map[ylabel]]
+            n = nsubsets[pheno_map[ylabel]] # n = nsubsets
             S[ylabel] = per_sample_subsets(X_i, n, ncell, k_init)
 
     # mix them
@@ -248,13 +246,19 @@ def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
     for y_i, x_i in S.items():
         data_list.append(x_i)
         y_values = []
-        for single_map in pheno_map:
-            y_values.append(single_map[y_i] * np.ones(x_i.shape[0], dtype=int))
+        if any(isinstance(single_map, np.ndarray) or isinstance(single_map, list) for single_map in pheno_map):
+            for single_map in pheno_map:
+                y_values.append(single_map[y_i] * np.ones(x_i.shape[0], dtype=int))
+        else:
+            y_values.append(pheno_map[y_i] * np.ones(x_i.shape[0], dtype=int))
         y_list.append(tuple(y_values))
 
     Xt = np.vstack(data_list)
     yt = np.hstack(y_list)
-    y_values = [yt[i] for i in range(len(pheno_map))]
+    if any(isinstance(single_map, np.ndarray) or isinstance(single_map, list) for single_map in pheno_map):
+        y_values = [yt[i] for i in range(len(pheno_map))]
+    else:
+        y_values = yt
     Xt, *y_args = sku.shuffle(Xt, *y_values) # i dont swap this because i want all elements to be shuffled, not just the labels ...
     return Xt, y_args
 
