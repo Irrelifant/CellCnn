@@ -423,37 +423,43 @@ def train_model(train_samples, train_phenotypes, outdir,
         if per_sample:  # for regression
             y_inputs_train = train_phenotype_dict.values()
             X_tr, y_tr = generate_subsets_mtl(X_train, y_inputs_train, id_train,
-                                              nsubset, ncell, per_sample, mtl_tasks=mtl_tasks)
+                                              nsubset, ncell, per_sample)
 
             if (valid_samples is not None) or generate_valid_set:
                 y_inputs_valid = valid_phenotype_dict.values()
                 X_v, y_v = generate_subsets_mtl(X_valid, y_inputs_valid, id_valid,
-                                                nsubset, ncell, per_sample, mtl_tasks=mtl_tasks)
+                                                nsubset, ncell, per_sample)
 
         # generate 'nsubset' multi-cell inputs per class
         # todo check if we can run it in that mode AND have regression predictions
         else:
             nsubset_list = []
-            if mtl_tasks == 1:
-                for pheno in range(len(np.unique(train_phenotype_dict[0]))):
-                    nsubset_list.append(nsubset // np.sum(train_phenotype_dict[0] == pheno)) # out of this we will pick the amount of subsets
-                X_tr, y_tr = generate_subsets_mtl(X_train, train_phenotype_dict[0], id_train,
-                                                  nsubset_list, ncell, per_sample, mtl_tasks=mtl_tasks)
-            else:
-                # todo idee hier classification und regression y_tr unterscheiden und später wieder zusammenfügen (per_sampel ist NOTWENDIG für regression)
-                for pheno in range(len(np.unique(train_phenotype_dict[0]))):
-                    nsubset_list.append(nsubset // np.sum(train_phenotype_dict[0] == pheno)) # out of this we will pick the amount of subsets
-                X_tr, y_tr = generate_subsets_mtl(X_train, train_phenotype_dict[0], id_train,
-                                                  nsubset_list, ncell, per_sample, mtl_tasks=mtl_tasks)
+            for pheno in range(len(np.unique(train_phenotype_dict[0]))):
+                nsubset_list.append(nsubset // np.sum(train_phenotype_dict[0] == pheno)) # out of this we will pick the amount of subsets
+            X_tr, y_tr = generate_subsets_mtl(X_train, train_phenotype_dict[0], id_train,
+                                              nsubset_list, ncell, per_sample)
 
-
+            #todo nsubset_list[0] to get the values of the list so i get an array in return of a certain shape:
+            # check if listr elements usually differ from each other (if so we got a label imbalance here!). As well i play around with per_sample,
+            for task_nr in range(1, mtl_tasks): # here i basically add the regression tasks to y_tr as well
+                input_subsets = int(len(X_tr) / len(train_phenotype_dict[0]))
+                _, y_tr_task = generate_subsets_mtl(X_train, train_phenotype_dict[task_nr], id_train,
+                                              nsubsets=input_subsets, ncell=ncell, per_sample=True)
+                y_tr.append(y_tr_task[0])
 
             if (valid_samples is not None) or generate_valid_set:
                 nsubset_list = []
                 for pheno in range(len(np.unique(valid_phenotype_dict[0]))):
                     nsubset_list.append(nsubset // np.sum(valid_phenotype_dict[0] == pheno))
                 X_v, y_v = generate_subsets_mtl(X_valid, valid_phenotype_dict[0], id_valid,
-                                                nsubset_list, ncell, per_sample, mtl_tasks=mtl_tasks)
+                                                nsubset_list, ncell, per_sample)
+
+                # todo check id_train
+                for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
+                    input_subsets = int(len(X_v) / len(valid_phenotype_dict[0]))
+                    _, y_v_task = generate_subsets_mtl(X_train, valid_phenotype_dict[task_nr], id_valid,
+                                                        nsubsets=input_subsets, ncell=ncell, per_sample=True)
+                    y_v.append(y_v_task[0])
     logger.info("Done.")
 
     # neural network configuration
