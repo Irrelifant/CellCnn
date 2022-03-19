@@ -150,7 +150,7 @@ def split_test_valid_train(X, y, test_perc=0.8, train_perc=0.2, valid_perc=0.5, 
 def get_fitted_model(X_train, X_valid, y_train, y_valid,
                      nrun=15, ncell=200, nsubset=1000, nfilters=[3],
                      coeff_l2=0.0001, coeff_l1=0, max_epochs=50, learning_rate=None,
-                     outdir='default_output_dir',
+                     outdir='default_output_dir', subset_selection='random',
                      per_sample=True, regression=True, verbose=True, result=False, mtl_tasks=1):
     ### for Pycharm i need to update the CellCNN model EVERY TIME I CHANGE stuff
     import importlib
@@ -162,7 +162,7 @@ def get_fitted_model(X_train, X_valid, y_train, y_valid,
 
     model = CellCnn(nrun=nrun, ncell=ncell, nsubset=nsubset,
                     nfilter_choice=nfilters, learning_rate=learning_rate,
-                    coeff_l2=coeff_l2, coeff_l1=coeff_l1,
+                    coeff_l2=coeff_l2, coeff_l1=coeff_l1, subset_selection=subset_selection,
                     max_epochs=max_epochs, per_sample=per_sample,
                     regression=regression, verbose=verbose, mtl_tasks=mtl_tasks)
 
