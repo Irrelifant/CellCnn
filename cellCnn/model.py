@@ -9,11 +9,13 @@ import os
 import copy
 import logging
 from collections import OrderedDict
+from time import time
 
 import keras.backend
 import keras.utils
 import numpy
 import numpy as np
+from keras.callbacks import CSVLogger
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import shuffle
@@ -27,11 +29,11 @@ from cellCnn.utils import mkdir_p
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, initializers, regularizers, optimizers, callbacks, losses
-
-from loss import RevisedUncertaintyLoss
+from loss_history import LossHistory
+from tensorflow.python.keras.callbacks import TensorBoard
+from loss_v2 import RevisedUncertaintyLossV2
 
 logger = logging.getLogger(__name__)
-
 
 class CellCnn(object):
     """ Creates a CellCnn model.
@@ -500,25 +502,26 @@ def train_model(train_samples, train_phenotypes, outdir,
         model = build_model(ncell, nmark, nfilter,
                             coeff_l1, coeff_l2, k,
                             dropout, dropout_p, regression, n_classes, lr, mtl_tasks=mtl_tasks)
-        statspath= os.path.join(outdir, 'stats')
-        keras.utils.plot_model(model, statspath, show_shapes=True)
+        statspath = os.path.join(outdir, 'stats')
 
         print(model.summary())
-        # print('\nlosses:', model.losses())
+        # print('\nlosses:', model.losses)
 
         filepath = os.path.join(outdir, 'nnet_run_%d.hdf5' % irun)
         try:
-            check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True, mode='auto')
+            # Callbacks, here i could just add my custom metric callback to get more info
+            check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True, mode='auto') # des saved the models
             earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
+            loss_history = LossHistory(outdir=outdir, irun=irun)
+            csv_logger = CSVLogger(f'{outdir}/stats/training.log', separator=',', append=True)
+            tensorboard = TensorBoard(log_dir=f'{outdir}/stats/tensorboard/{model.name}_{time()}')
 
             y_trains = [y_tr[task] for task in range(mtl_tasks)]
             y_valids = [y_v[task] for task in range(mtl_tasks)]
-            print('Trainfit incoming')
             hist = model.fit([X_tr, *y_trains], y=y_trains,
-                      epochs=max_epochs, batch_size=bs, callbacks=[check, earlyStopping],
+                      epochs=max_epochs, batch_size=bs,
+                             callbacks=[check, earlyStopping, csv_logger, loss_history, tensorboard],
                       validation_data=([X_v, *y_valids], y_valids), verbose=verbose)
-            print('Trainfit done')
-
             # load the model from the epoch with highest validation accuracy
             model.load_weights(filepath)
 
@@ -614,42 +617,6 @@ def train_model(train_samples, train_phenotypes, outdir,
                     results[f'filter_diff_{task}'] = filter_diff
     return results
 
-
-# loss list contains loss functions
-# !!trick was that this return a loss FUNCTION and not a value! therefore i fucked up a lot of time...
-def uncertainty_loss(losses, model):
-    # kendall: Sigma is the noise parameter! As it increases, the loss decreases
-    print('Custom loss fn entered')
-    sigma_squares = []
-    for i, loss in enumerate(losses):
-        sigma = tf.keras.backend.variable(value=0.5, dtype=tf.float32,
-                                          name=f'Sigma_sq_{i}',
-                                          constraint=lambda t: tf.clip_by_value(t, 0, 1))
-        print(sigma)
-        model.add_weight(sigma)
-        sigma_squares.append(sigma)
-
-    def get_loss(y_true, y_pred):
-        print('get_loss entered, printing inputs')
-        print(y_true)
-        print(y_pred)
-        print('SIGMAS')
-        # print(tf.keras.backend.print_tensor(sigma_squares[0]))
-        # print(tf.keras.backend.print_tensor(sigma_squares[1]))
-        print('\n')
-
-        loss = 0.
-        for i, task_loss in enumerate(losses):
-            factor = tf.math.divide_no_nan(1.0, tf.multiply(2.0, sigma_squares[i]))
-            listed_loss = task_loss(y_true[i], y_pred[i])
-            product = tf.multiply(factor, listed_loss)
-            # tf.add(listed_loss, tf.math.log(sigma_squares[i]))
-            loss = tf.add(loss, tf.add(product, tf.math.log(sigma_squares[i])))
-        return loss
-
-    return get_loss
-
-
 def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                 k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl_tasks=1):
     """ Builds the neural network architecture """
@@ -672,26 +639,19 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     if dropout or ((dropout == 'auto') and (nfilter > 5)):
         pooled = layers.Dropout(rate=dropout_p)(pooled)
 
-        ### todo modify loss functions here
+    #todo opt it a little by adding dicts with name: metric to the complie statement
     losses = []
     metrics = []
     if not regression:
         losses.append(tf.keras.losses.CategoricalCrossentropy())  # for phenotype
-        metrics.append('accuracy')
+        metrics.append(['accuracy'])
         for task in range(1, mtl_tasks):
             losses.append(tf.keras.losses.MeanSquaredError())
-            metrics.append('mean_squared_error')
+            metrics.append(['mean_squared_error'])
     else:
         for task in range(mtl_tasks):
             losses.append(tf.keras.losses.MeanSquaredError())
-    # todo  rename this to loss layer or sth. ...
-    # check where i need to put that layer in
-    # shaped_input = layers.Lambda(pool_top_k, output_shape=(nfilter,), arguments={'k': k})(data_input)
-    ########################################################
-    # -> erkenntniss i9ch will hier gar keine inputs haben sondern pro task den output!
-    # pooled = RevisedUncertaintyLoss(losses)([])
-    # evtld och als output ?
-
+            metrics.append(['mean_squared_error'])
     # network prediction output
     output_layers = []
     if not regression:
@@ -726,13 +686,29 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
 
     # dynamically defining the inputs, the user needs to insert as many as tasks (obviously...)
     # todo is there any solution that solves this better (by taking the y_train´´ as those )
-    out = RevisedUncertaintyLoss(loss_list=losses )([y_pheno, *y_task_inputs.values(), *output_layers])
+    # accoring to https://towardsdatascience.com/solving-the-tensorflow-keras-model-loss-problem-fd8281aeeb11 it is mandatory to add y_trues as inputs...
+    # but also it recommends the endpoint loss layer, that mi9ght be just what i wanted
+    sigmas=[]
+    sigma_init = tf.random_uniform_initializer(minval=0.2, maxval=1.)
+    for i in range(len(losses)):
+        sigma = tf.Variable(name=f'sigmas_sq_{i}', dtype=tf.float32,
+                            initial_value=sigma_init(shape=(),
+                                                     dtype='float32'),
+                            trainable=True)
+        sigmas.append(sigma)
+
+    out = RevisedUncertaintyLossV2(loss_list=losses, sigmas=sigmas)([y_pheno, *y_task_inputs.values(), *output_layers])
+    #out = RevisedUncertaintyLoss(loss_list=losses)([y_pheno, *y_task_inputs.values(), *output_layers])
+    #out = LogisticEndpoint(loss_list=losses, name='Revised_uncertainty_loss_endpoint')([y_pheno, *y_task_inputs.values(), *output_layers])
     # evtl pooled statt output layers ?
     model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=out)
+    #model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=output_layers)
 
     model.compile(optimizer=optimizers.Adam(learning_rate=lr),
                   loss=None,
                   metrics=metrics)
+    # metrics are a list of lists, first LIST is for first output and so on...
+    #totest removal of metrics
     # todo  assert stuff
 
     return model

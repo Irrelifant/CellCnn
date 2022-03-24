@@ -20,6 +20,9 @@ statsmodels= "*"
 FlowIO= "*"
 tensorflow = "*"
 cellcnn = {editable = true,path = "."}
+pydot = "*"
+neptune-client = "*"
+neptune-tensorboard = "*"
 
 [requires]
 python_version = "3.7"
