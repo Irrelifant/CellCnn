@@ -13,6 +13,7 @@ def get_listed_loss_by_shape(y_true, y_pred):
     else:
         # regression
         return tf.reduce_mean(tf.reduce_sum(tf.abs(tf.subtract(y_pred, y_true)), axis=-1))
+        # axis = -1 means to return index of last axis
 
 
 class RevisedUncertaintyLossV2(Layer):
@@ -38,7 +39,6 @@ class RevisedUncertaintyLossV2(Layer):
 
             loss = tf.add(loss, tf.add(tf.multiply(factor, listed_loss), tf.math.log(tf.add(1., sigma_sq))))
         return loss
-    #   without this reduce min i would get a shape error. gelling me to pass shapes of fitting ranks in
     # todo investigate
 
     def get_config(self):
@@ -58,4 +58,4 @@ class RevisedUncertaintyLossV2(Layer):
         loss = self.get_mtl_loss(ys_true, ys_pred)
         self.add_loss(loss, inputs=inputs)
         return ys_pred
-        # this doesn´t really matter -> apparently it does since that is what my out will be...
+        # output doesn´t really matter -> apparently it does since that is what my out will be...

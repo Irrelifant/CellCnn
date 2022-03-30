@@ -4,36 +4,37 @@ This module contains functions for performing a CellCnn analysis.
 
 """
 
-import sys
-import os
 import copy
 import logging
+import os
+import sys
 from collections import OrderedDict
 from time import time
 
 import keras.backend
 import keras.utils
-import numpy
 import numpy as np
+import tensorflow as tf
+import tensorflow_addons as tfa
 from keras.callbacks import CSVLogger
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import shuffle
+from tensorflow import keras
+from tensorflow.keras import layers, initializers, regularizers, optimizers, callbacks
+from tensorflow.python.keras.callbacks import TensorBoard
 
-from cellCnn.utils import combine_samples, normalize_outliers_to_control, generate_subsets_mtl, combine_samples_mtl
+from all_callbacks import CustomCallback
 from cellCnn.utils import cluster_profiles, keras_param_vector
-from cellCnn.utils import generate_subsets, generate_biased_subsets
+from cellCnn.utils import combine_samples, normalize_outliers_to_control, generate_subsets_mtl
+from cellCnn.utils import generate_biased_subsets
 from cellCnn.utils import get_filters_classification, get_filters_regression
 from cellCnn.utils import mkdir_p
-
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers, initializers, regularizers, optimizers, callbacks, losses
 from loss_history import LossHistory
-from tensorflow.python.keras.callbacks import TensorBoard
 from loss_v2 import RevisedUncertaintyLossV2
 
 logger = logging.getLogger(__name__)
+
 
 class CellCnn(object):
     """ Creates a CellCnn model.
@@ -178,7 +179,7 @@ class CellCnn(object):
         self.results = res
         return self
 
-    def predict(self, new_samples, ncell_per_sample=None):
+    def predict(self, new_samples, ncell_per_sample=None, mtl_inputs=None):
         """ Makes predictions for new samples.
             Takes the mean of the best 3 nets´ predictions and return it for
 
@@ -200,6 +201,8 @@ class CellCnn(object):
 
         # z-transform the new samples if we did that for the training samples
         scaler = self.results['scaler']
+        # todo Problem: der sclaar ist gefitted auf dim 2 und wir geben hier dim 3 rein (oben wird combine_samples()
+        #  gemacht, wieso is des ohne mtl nicht aufs maul gefallen ? )
         if scaler is not None:
             new_samples = copy.deepcopy(new_samples)
             new_samples = [scaler.transform(x) for x in new_samples]
@@ -223,7 +226,8 @@ class CellCnn(object):
             model = build_model(ncell_per_sample, nmark,
                                 nfilter=nfilter, coeff_l1=0, coeff_l2=0,
                                 k=ncell_pooled, dropout=False, dropout_p=0,
-                                regression=self.regression, n_classes=n_classes, lr=0.01, mtl_tasks=self.mtl_tasks)
+                                regression=self.regression, n_classes=n_classes,
+                                lr=0.01, mtl_tasks=self.mtl_tasks)
 
             # and load the learned filter and output weights
             weights = self.results['best_3_nets'][i_enum]
@@ -236,7 +240,8 @@ class CellCnn(object):
             new_samples = [shuffle(x)[:ncell_per_sample].reshape(1, ncell_per_sample, nmark)
                            for x in new_samples]
             data_test = np.vstack(new_samples)
-            prediction = model.predict(data_test)
+            prediction = model.predict([data_test, *mtl_inputs])
+            # prediction = model.predict(data_test)
             y_pred[i_enum] = prediction
 
         if self.mtl_tasks == 1:
@@ -244,9 +249,7 @@ class CellCnn(object):
         else:
             result = []
             for task_nr in range(self.mtl_tasks):
-                to_mean = []
-                for idx, pred in enumerate(y_pred.values()):
-                    to_mean.append(pred[task_nr])
+                to_mean = [pred[task_nr] for pred in y_pred.values()]
                 mean = np.mean(np.array(to_mean), axis=0)
                 result.append(mean)
         return result
@@ -263,26 +266,8 @@ def train_model(train_samples, train_phenotypes, outdir,
                 dendrogram_cutoff=0.4, accur_thres=.95, verbose=1, mtl_tasks=1):
     """ Performs a CellCnn analysis """
 
-    train_phenotype_dict = OrderedDict()
-    valid_phenotype_dict = OrderedDict()
-    if any(isinstance(item, np.ndarray) for item in train_phenotypes) or \
-            any(isinstance(item, list) for item in train_phenotypes):  ### is list of lists ?
-        if mtl_tasks != len(train_phenotypes):
-            sys.stderr.write('"mtl_tasks" must be the length of the "train_phenotypes" list.\n')
-
-        for task in range(mtl_tasks):
-            train_phenotype_dict[task] = np.asarray(train_phenotypes[task])
-    else:
-        train_phenotype_dict[0] = np.asarray(train_phenotypes)
-
-    ### if you pass in valid train valid phenos should be given as well
-    if any(isinstance(item, np.ndarray) for item in valid_phenotypes) or any(
-            isinstance(item, list) for item in valid_phenotypes):  ### is list of lists ?
-        for task in range(mtl_tasks):
-            valid_phenotype_dict[task] = np.asarray(valid_phenotypes[task])
-    else:
-        if valid_samples is not None:
-            valid_phenotype_dict[0] = valid_phenotypes
+    train_phenotype_dict = init_phenotype_dict(mtl_tasks, train_phenotypes)
+    valid_phenotype_dict = init_phenotype_dict(mtl_tasks, valid_phenotypes)
 
     if maxpool_percentages is None:
         maxpool_percentages = [0.01, 1., 5., 20., 100.]
@@ -366,7 +351,7 @@ def train_model(train_samples, train_phenotypes, outdir,
     # generate multi-cell inputs
     logger.info("Generating multi-cell inputs...")
 
-    # todo mtl FIND OUT if i need to  do this only for phenotype or as well for other tasks
+    # todo mtl FIND OUT if i need to do this only for phenotype or as well for other tasks
     if subset_selection == 'outlier':
         # here we assume that class 0 is always the control class
         x_ctrl_train = X_train[y_train == 0]
@@ -433,15 +418,8 @@ def train_model(train_samples, train_phenotypes, outdir,
                     train_phenotype_dict[0] == pheno))  # out of this we will pick the amount of subsets
             X_tr, y_tr = generate_subsets_mtl(X_train, train_phenotype_dict[0], id_train,
                                               nsubset_list, ncell, per_sample)
-
             # todo nsubset_list[0] to get the values of the list so i get an array in return of a certain shape:
             # check if listr elements usually differ from each other (if so we got a label imbalance here!). As well i play around with per_sample,
-            for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
-                input_subsets = int(len(X_tr) / len(train_phenotype_dict[0]))
-                _, y_tr_task = generate_subsets_mtl(X_train, train_phenotype_dict[task_nr], id_train,
-                                                    nsubsets=input_subsets, ncell=ncell, per_sample=True)
-                y_tr.append(y_tr_task[0])
-
             if (valid_samples is not None) or generate_valid_set:
                 nsubset_list = []
                 for pheno in range(len(np.unique(valid_phenotype_dict[0]))):
@@ -449,11 +427,19 @@ def train_model(train_samples, train_phenotypes, outdir,
                 X_v, y_v = generate_subsets_mtl(X_valid, valid_phenotype_dict[0], id_valid,
                                                 nsubset_list, ncell, per_sample)
 
-                for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
-                    input_subsets = int(len(X_v) / len(valid_phenotype_dict[0]))
-                    _, y_v_task = generate_subsets_mtl(X_train, valid_phenotype_dict[task_nr], id_valid,
-                                                       nsubsets=input_subsets, ncell=ncell, per_sample=True)
-                    y_v.append(y_v_task[0])
+        # since my freq tasks are all regression i just add for all further tasks the  regression version of it
+        for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
+            input_subsets = int(len(X_tr) / len(train_phenotype_dict[0]))
+            _, y_tr_task = generate_subsets_mtl(X_train, train_phenotype_dict[task_nr], id_train,
+                                                nsubsets=input_subsets, ncell=ncell, per_sample=True)
+            y_tr.append(y_tr_task[0])
+
+        if (valid_samples is not None) or generate_valid_set:
+            for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
+                input_subsets = int(len(X_v) / len(valid_phenotype_dict[0]))
+                _, y_v_task = generate_subsets_mtl(X_valid, valid_phenotype_dict[task_nr], id_valid,
+                                                   nsubsets=input_subsets, ncell=ncell, per_sample=True)
+                y_v.append(y_v_task[0])
     logger.info("Done.")
 
     # neural network configuration
@@ -502,15 +488,14 @@ def train_model(train_samples, train_phenotypes, outdir,
         model = build_model(ncell, nmark, nfilter,
                             coeff_l1, coeff_l2, k,
                             dropout, dropout_p, regression, n_classes, lr, mtl_tasks=mtl_tasks)
-        statspath = os.path.join(outdir, 'stats')
-
         print(model.summary())
         # print('\nlosses:', model.losses)
 
         filepath = os.path.join(outdir, 'nnet_run_%d.hdf5' % irun)
         try:
             # Callbacks, here i could just add my custom metric callback to get more info
-            check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True, mode='auto') # des saved the models
+            check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
+                                              mode='auto')  # des saved the models
             earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
             loss_history = LossHistory(outdir=outdir, irun=irun)
             csv_logger = CSVLogger(f'{outdir}/stats/training.log', separator=',', append=True)
@@ -518,47 +503,42 @@ def train_model(train_samples, train_phenotypes, outdir,
 
             y_trains = [y_tr[task] for task in range(mtl_tasks)]
             y_valids = [y_v[task] for task in range(mtl_tasks)]
-            hist = model.fit([X_tr, *y_trains], y=y_trains,
-                      epochs=max_epochs, batch_size=bs,
-                             callbacks=[check, earlyStopping, csv_logger, loss_history, tensorboard],
-                      validation_data=([X_v, *y_valids], y_valids), verbose=verbose)
+            np.seterr('raise')
+            hist = model.fit([X_tr, *y_trains], y_trains,
+                             epochs=max_epochs, batch_size=bs,
+                             callbacks=[earlyStopping, check],
+                             validation_data=([X_v, *y_valids], y_valids), verbose=verbose)
+            tf.keras.utils.plot_model(model, to_file='model.png', show_shapes=True, show_dtype=True)
             # load the model from the epoch with highest validation accuracy
+            # tensorboard, csv_logger, loss_history,
             model.load_weights(filepath)
+            # print('My custom loss: ', model.compiled_loss._get_loss_object(model.compiled_loss._losses).fn)
 
+            valid_metric_results = dict()
             if not regression:
-                valid_metric_results = dict()
-                valid_metric = model.evaluate([X_v, *y_valids], [y_v[task] for task in range(mtl_tasks)])[-1]
-                if not isinstance(valid_metric, list):
-                    valid_metric_results[0] = valid_metric
+                valid_metric = model.evaluate([X_v, *y_valids], y_valids)
 
-                logger.info(f"Best validation accuracy: {valid_metric_results[0]:.2f}")
-                accuracies[irun] = valid_metric_results[0]
-
-                # take the one for phenotype task
-
-                for task in range(1, mtl_tasks):
-                    logger.info(f"out {task} loss: {valid_metric_results[0]}")
-
-            else:
-                train_metric = model.evaluate([X_tr, *y_trains], [y_tr[task] for task in range(mtl_tasks)],
-                                              batch_size=bs)
-                valid_metric = model.evaluate([X_v, *y_valids], [y_v[task] for task in range(mtl_tasks)], batch_size=bs)
-
-                if mtl_tasks == 1:
-                    logger.info(f"Best train loss: {train_metric}")
-                    logger.info(f"Best valid loss: {valid_metric}")
-                    accuracies[irun] = - valid_metric
+                if isinstance(valid_metric, list):
+                    valid_metric_results = {i: metric for i, metric in enumerate(valid_metric)}
+                    for metric, name in zip(valid_metric_results.values(), model.metrics_names):
+                        logger.info(f"Metric {name} achieved {metric:.2f}")
                 else:
-                    logger.info(f"Best train tot. loss: {train_metric[0]}")
-                    logger.info(f"Best valid tot. loss: {valid_metric[0]}")
-                    accuracies[irun] = - valid_metric[0]
+                    valid_metric_results[0] = valid_metric
+            else:
+                train_metric = model.evaluate([X_tr, *y_trains], y_trains, batch_size=bs)
+                valid_metric = model.evaluate([X_v, *y_valids], y_trains, batch_size=bs)
 
-                    freq_metrics = []
-                    for task in range(1, mtl_tasks):
-                        logger.info(f"out train {task} loss: {train_metric[task]}")
-                        logger.info(f"out valid {task} loss: {valid_metric[task]}")
-                        freq_metrics.append(- valid_metric[task])
-                    frequency_loss[irun] = freq_metrics
+                if isinstance(valid_metric, list):
+                    valid_metric_results = {i: metric for i, metric in enumerate(valid_metric)}
+                    train_metric_results = {i: metric for i, metric in enumerate(train_metric)}
+                    for v_metric, t_metric, name in zip(valid_metric_results.values(), train_metric_results.values(),
+                                                        model.metrics_names):
+                        logger.info(f"Validation metric {name} achieved {v_metric:.2f}")
+                        logger.info(f"Train metric {name} achieved {t_metric:.2f}")
+                else:
+                    valid_metric_results[0] = - valid_metric
+                    accuracies[irun] = valid_metric_results[0]
+            accuracies[irun] = valid_metric_results[0]  # it is always filles with the best loss!
 
             # extract the network parameters
             w_store[irun] = model.get_weights()
@@ -596,26 +576,79 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     if (valid_samples is not None) and (w_cons is not None):
         maxpool_percentage = config['maxpool_percentage'][best_accuracy_idx]
-        if regression:
-            for task in range(mtl_tasks):
-                tau = get_filters_regression(w_cons, z_scaler, valid_samples, valid_phenotype_dict[task],
+        for task in range(mtl_tasks):
+            if isinstance(valid_phenotype_dict[task][0], int):
+                # classification task
+                filter_diff = get_filters_classification(w_cons, z_scaler,
+                                                         valid_samples,
+                                                         valid_phenotype_dict[task],
+                                                         maxpool_percentage)
+
+                if task == 0:  # this is mainly here for keeping the "old" output the same (STL way)
+                    results['filter_diff'] = filter_diff
+                else:
+                    results[f'filter_diff_{task}'] = filter_diff
+            else:
+                # regression task
+                tau = get_filters_regression(w_cons, z_scaler, valid_samples,
+                                             valid_phenotype_dict[task],
                                              maxpool_percentage)
 
                 if task == 0:  # this is mainly here for keeping the "old" output the same (STL way)
                     results['filter_tau'] = tau
                 else:
                     results[f'filter_tau_{task}'] = tau
-
-        else:
-            for task in range(mtl_tasks):
-                filter_diff = get_filters_classification(w_cons, z_scaler, valid_samples,
-                                                         valid_phenotype_dict[task], maxpool_percentage)
-
-                if task == 0:  # this is mainly here for keeping the "old" output the same (STL way)
-                    results['filter_diff'] = filter_diff
-                else:
-                    results[f'filter_diff_{task}'] = filter_diff
     return results
+
+
+def init_phenotype_dict(mtl_tasks, phenotypes):
+    dict = OrderedDict()
+    if any(isinstance(item, np.ndarray) for item in phenotypes) or \
+            any(isinstance(item, list) for item in phenotypes):
+        ### MTL mode, check for list of lists
+        if mtl_tasks != len(phenotypes):
+            sys.stderr.write(f'"mtl_tasks" must be the length of the "phenotypes" list.\n')
+
+        for task in range(mtl_tasks):
+            dict[task] = np.asarray(phenotypes[task])
+    else:
+        # STL mode
+        dict[0] = np.asarray(phenotypes)
+    return dict
+
+
+# inheriting from Layer would allow automated gradient backpropagation that is not available for Callback
+def get_listed_loss_by_shape(y_true, y_pred):
+    if y_true.shape[1] == 2:
+        # classification
+        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits=y_pred, labels=y_true)
+        return tf.reduce_mean(cross_entropy, name='loss')
+    else:
+        return tf.reduce_mean(tf.reduce_sum(tf.abs(tf.subtract(y_pred, y_true)), axis=-1))
+
+
+def get_mtl_loss(loss_list, sigmas):
+    print('loss wrapper')
+
+    def loss_fn(y_true, y_pred):
+        print('loss fn called')
+        print(y_true)
+        print(y_pred)
+        loss = 0.
+        # evtl die richtigen loss funktions nehmen...
+        for i in range(0, len(loss_list)):
+            sigma_sq = tf.pow(sigmas[i], 2)
+            factor = tf.math.divide_no_nan(1.0, tf.multiply(2.0, sigma_sq))
+            print(y_true)
+            print(y_pred)
+            listed_loss = get_listed_loss_by_shape(y_true, y_pred)
+            print(f'listed_loss task {i} is {listed_loss}')
+            loss = tf.add(loss, tf.add(tf.multiply(factor, listed_loss), tf.math.log(tf.add(1., sigma_sq))))
+            print(loss)
+        return loss
+
+    return loss_fn
+
 
 def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                 k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl_tasks=1):
@@ -639,22 +672,19 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     if dropout or ((dropout == 'auto') and (nfilter > 5)):
         pooled = layers.Dropout(rate=dropout_p)(pooled)
 
-    #todo opt it a little by adding dicts with name: metric to the complie statement
+    # todo opt it a little by adding dicts with name: metric to the complie statement
+
+    # network prediction output
     losses = []
     metrics = []
+    output_layers = []
+
     if not regression:
         losses.append(tf.keras.losses.CategoricalCrossentropy())  # for phenotype
         metrics.append(['accuracy'])
         for task in range(1, mtl_tasks):
-            losses.append(tf.keras.losses.MeanSquaredError())
-            metrics.append(['mean_squared_error'])
-    else:
-        for task in range(mtl_tasks):
-            losses.append(tf.keras.losses.MeanSquaredError())
-            metrics.append(['mean_squared_error'])
-    # network prediction output
-    output_layers = []
-    if not regression:
+            losses.append(keras.losses.MeanSquaredError())
+            metrics.append(['mean_squared_error', tfa.metrics.r_square.RSquare(dtype=tf.float32, y_shape=(1,))])
         output = layers.Dense(units=n_classes,
                               activation='softmax',
                               kernel_initializer=initializers.RandomUniform(),
@@ -662,6 +692,9 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                               name='output_desease')(pooled)
         y_pheno = layers.Input(shape=(2,), name='input_desease')
     else:
+        for task in range(mtl_tasks):
+            losses.append(keras.losses.MeanSquaredError())
+            metrics.append(['mean_squared_error', tfa.metrics.r_square.RSquare(dtype=tf.float32, y_shape=(1,))])
         output = layers.Dense(units=1,
                               activation='linear',
                               kernel_initializer=initializers.RandomUniform(),
@@ -675,6 +708,7 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     # all my atl tasks will be of regression type, start from 1 to not add the phenotype task twice
     # todo make it not mandadorty to put pheno first
     y_task_inputs = dict()
+
     for task in range(1, mtl_tasks):
         layer = layers.Dense(units=1,
                              activation='linear',
@@ -688,27 +722,21 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     # todo is there any solution that solves this better (by taking the y_train´´ as those )
     # accoring to https://towardsdatascience.com/solving-the-tensorflow-keras-model-loss-problem-fd8281aeeb11 it is mandatory to add y_trues as inputs...
     # but also it recommends the endpoint loss layer, that mi9ght be just what i wanted
-    sigmas=[]
+    sigmas = []
     sigma_init = tf.random_uniform_initializer(minval=0.2, maxval=1.)
     for i in range(len(losses)):
         sigma = tf.Variable(name=f'sigmas_sq_{i}', dtype=tf.float32,
-                            initial_value=sigma_init(shape=(),
-                                                     dtype='float32'),
-                            trainable=True)
+                            initial_value=sigma_init(shape=(), dtype='float32'), trainable=True)
         sigmas.append(sigma)
 
     out = RevisedUncertaintyLossV2(loss_list=losses, sigmas=sigmas)([y_pheno, *y_task_inputs.values(), *output_layers])
-    #out = RevisedUncertaintyLoss(loss_list=losses)([y_pheno, *y_task_inputs.values(), *output_layers])
-    #out = LogisticEndpoint(loss_list=losses, name='Revised_uncertainty_loss_endpoint')([y_pheno, *y_task_inputs.values(), *output_layers])
-    # evtl pooled statt output layers ?
     model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=out)
-    #model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=output_layers)
 
     model.compile(optimizer=optimizers.Adam(learning_rate=lr),
-                  loss=None,
                   metrics=metrics)
+    # get_mtl_loss(loss_list=losses, sigmas=sigmas)
     # metrics are a list of lists, first LIST is for first output and so on...
-    #totest removal of metrics
+    # totest removal of metrics
     # todo  assert stuff
 
     return model

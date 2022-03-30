@@ -2,9 +2,6 @@ import os
 import keras.callbacks
 from matplotlib import pyplot as plt
 
-from utils import mkdir_p
-
-
 class LossHistory(keras.callbacks.Callback):
     def __init__(self, outdir='/default_outdir', irun=0):
         self.outdir = outdir

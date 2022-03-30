@@ -23,6 +23,8 @@ cellcnn = {editable = true,path = "."}
 pydot = "*"
 neptune-client = "*"
 neptune-tensorboard = "*"
+tensorflow-addons = "*"
+pydotplus = "*"
 
 [requires]
 python_version = "3.7"

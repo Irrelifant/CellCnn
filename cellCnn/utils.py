@@ -228,8 +228,7 @@ def per_sample_subsets(X, nsubsets, ncell_per_subset, k_init=False):
 # todo pheno map is a list of the prev pheno map now!
 def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
                          per_sample=False, k_init=False):
-
-    S = dict() # dict aller label zu subsets per sample
+    S = dict()  # dict aller label zu subsets per sample
     n_out = len(np.unique(sample_id))
 
     for ylabel in range(n_out):
@@ -238,7 +237,7 @@ def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
         if per_sample:
             S[ylabel] = per_sample_subsets(X_i, nsubsets, ncell, k_init)
         else:
-            n = nsubsets[pheno_map[ylabel]] # n = nsubsets
+            n = nsubsets[pheno_map[ylabel]]  # n = nsubsets
             S[ylabel] = per_sample_subsets(X_i, n, ncell, k_init)
 
     # mix them
@@ -259,7 +258,8 @@ def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
         y_values = [yt[i] for i in range(len(pheno_map))]
     else:
         y_values = yt
-    Xt, *y_args = sku.shuffle(Xt, *y_values) # i dont swap this because i want all elements to be shuffled, not just the labels ...
+    Xt, *y_args = sku.shuffle(Xt,
+                              *y_values)  # i dont swap this because i want all elements to be shuffled, not just the labels ...
     return Xt, y_args
 
 
@@ -350,8 +350,7 @@ def get_filters_classification(filters, scaler, valid_samples, valid_phenotypes,
 
     for i, filter_params in enumerate(filters):
         y_pred, filter_class = single_filter_output(filter_params, valid_samples, mp)
-        filter_diff[i] = np.mean(y_pred[y_true == filter_class]) - \
-                         np.mean(y_pred[y_true != filter_class])
+        filter_diff[i] = np.mean(y_pred[y_true == filter_class]) - np.mean(y_pred[y_true != filter_class])
     return filter_diff
 
 

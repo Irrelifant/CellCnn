@@ -258,16 +258,7 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
             else:
                 break
         if show_filters:
-            plt.figure()
-            sns.set_style('whitegrid')
-            plt.plot(np.arange(len(filter_diff)), filter_diff, '--')
-            plt.xticks(np.arange(len(filter_diff)), ['filter %d' % i for i in sorted_idx],
-                       rotation='vertical')
-            plt.ylabel('average cell filter response difference between classes')
-            sns.despine()
-            plt.savefig(os.path.join(outdir, 'filter_response_differences.pdf'), format='pdf')
-            plt.clf()
-            plt.close()
+            plot_filter_response_difference(filter_diff, outdir, sorted_idx, ylabel='average cell filter response difference between classes')
 
     elif 'filter_tau' in results:
         filter_diff = results['filter_tau']
@@ -282,18 +273,22 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
             else:
                 break
         if show_filters:
-            plt.figure()
-            sns.set_style('whitegrid')
-            plt.plot(np.arange(len(filter_diff)), filter_diff, '--')
-            plt.xticks(np.arange(len(filter_diff)), ['filter %d' % i for i in sorted_idx],
-                       rotation='vertical')
-            plt.ylabel('Kendalls tau')
-            sns.despine()
-            plt.savefig(os.path.join(outdir, 'filter_response_differences.pdf'), format='pdf')
-            plt.clf()
-            plt.close()
-
+            plot_filter_response_difference(filter_diff, outdir, sorted_idx, ylabel='Kendalls tau')
     return list(keep_idx)
+
+
+def plot_filter_response_difference(filter_diff, outdir, sorted_idx,
+                                    ylabel='average cell filter response difference between classes'):
+    plt.figure()
+    sns.set_style('whitegrid')
+    plt.plot(np.arange(len(filter_diff)), filter_diff, '--')
+    plt.xticks(np.arange(len(filter_diff)), ['filter %d' % i for i in sorted_idx],
+               rotation='vertical')
+    plt.ylabel(ylabel)
+    sns.despine()
+    plt.savefig(os.path.join(outdir, 'filter_response_differences.pdf'), format='pdf')
+    plt.clf()
+    plt.close()
 
 
 def plot_filters(results, labels, outdir):
@@ -573,7 +568,6 @@ def plot_tsne_grid(z, x, fig_path, labels=None, fig_size=(9, 9), g_j=7,
                      aspect=True,
                      direction="row",
                      axes_pad=(0.15, 0.5),
-                     add_all=True,
                      label_mode="1",
                      share_all=True,
                      cbar_location="top",
@@ -614,7 +608,6 @@ def plot_tsne_selection_grid(z_pos, x_pos, z_neg, vmin, vmax, fig_path,
                      aspect=True,
                      direction="row",
                      axes_pad=(0.15, 0.5),
-                     add_all=True,
                      label_mode="1",
                      share_all=True,
                      cbar_location="top",
