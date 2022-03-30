@@ -93,8 +93,8 @@ def get_chunks_from_df_mtl(patient_df, freq_df, desease_state=0, clusters=None, 
 def get_chunks_from_df(patient_df, freq_df, desease_state=0, batch_size=100):
     selection_pool = []
     for patient, df in patient_df.items():
-        selection_idx = np.random.choice(df.index, batch_size)
-        selection = df.loc[selection_idx, df.columns != 'cluster']  # to get 'cluster' out
+        selection_idx = np.random.choice(df.index, df.shape[0])
+        selection = df.loc[selection_idx, df.columns != 'cluster']  # to get 'cluster' column out
         all_freqs = freq_df[patient]
         selection_pool.append((selection, all_freqs, desease_state))
     return selection_pool
@@ -124,9 +124,9 @@ def split_test_train_valid(*args, train_perc=0.8, test_perc=0.2, valid_perc=0.5,
     for i, value in enumerate(args):
         length = len(value)
         results[f'{i}_test'] = value[:int(test_perc * length)]
-        results[f'{i}_train'] = np.asarray(value[int(test_perc * length):])
-        results[f'{i}_valid'] = np.asarray(results[f'{i}_test'][int(valid_perc * len(results[f'{i}_test'])):])
-        results[f'{i}_test'] = np.asarray(results[f'{i}_test'][:int(valid_perc * len(results[f'{i}_test']))])
+        results[f'{i}_train'] = np.asarray(value[int(test_perc * length):], dtype=object)
+        results[f'{i}_valid'] = np.asarray(results[f'{i}_test'][int(valid_perc * len(results[f'{i}_test'])):], dtype=object)
+        results[f'{i}_test'] = np.asarray(results[f'{i}_test'][:int(valid_perc * len(results[f'{i}_test']))], dtype=object)
 
     return results.values()
 
