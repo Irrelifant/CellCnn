@@ -167,8 +167,11 @@ def plot_results(results, samples, phenotypes, labels, outdir,
 
     logger.info("Computing t-SNE projection...")
     tsne_idx = np.random.choice(x.shape[0], tsne_ncell)
+    # those are the overlaid tsne values
     x_for_tsne = x[tsne_idx].copy()
+    # the 2 tsne components... per cell
     x_tsne = TSNE(n_components=2).fit_transform(x_for_tsne)
+
     vmin, vmax = np.zeros(x.shape[1]), np.zeros(x.shape[1])
     for seq_index in range(x.shape[1]):
         vmin[seq_index] = np.percentile(x[:, seq_index], 1)

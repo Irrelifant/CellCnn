@@ -24,10 +24,9 @@ from tensorflow import keras
 from tensorflow.keras import layers, initializers, regularizers, optimizers, callbacks
 from tensorflow.python.keras.callbacks import TensorBoard
 
-from all_callbacks import CustomCallback
 from cellCnn.utils import cluster_profiles, keras_param_vector
 from cellCnn.utils import combine_samples, normalize_outliers_to_control, generate_subsets_mtl
-from cellCnn.utils import generate_biased_subsets
+from cellCnn.utils import generate_biased_subsets, generate_biased_subsets_mtl
 from cellCnn.utils import get_filters_classification, get_filters_regression
 from cellCnn.utils import mkdir_p
 from loss_history import LossHistory
@@ -255,7 +254,6 @@ class CellCnn(object):
         return result
 
 
-# todo make position of classification labels more dynamic
 def train_model(train_samples, train_phenotypes, outdir,
                 valid_samples=None, valid_phenotypes=None, generate_valid_set=True,
                 scale=True, quant_normed=False, nrun=20, regression=False,
@@ -351,7 +349,6 @@ def train_model(train_samples, train_phenotypes, outdir,
     # generate multi-cell inputs
     logger.info("Generating multi-cell inputs...")
 
-    # todo mtl FIND OUT if i need to do this only for phenotype or as well for other tasks
     if subset_selection == 'outlier':
         # here we assume that class 0 is always the control class
         x_ctrl_train = X_train[y_train == 0]
@@ -363,10 +360,10 @@ def train_model(train_samples, train_phenotypes, outdir,
         for pheno in range(1, len(np.unique(train_phenotype_dict[0]))):
             nsubset_biased.append(nsubset // np.sum(train_phenotype_dict[0] == pheno))
 
-        X_tr, y_tr = generate_biased_subsets(X_train, train_phenotype_dict[0], id_train, x_ctrl_train,
-                                             nsubset_ctrl, nsubset_biased, ncell, to_keep,
-                                             id_ctrl=np.where(train_phenotype_dict[0] == 0)[0],
-                                             id_biased=np.where(train_phenotype_dict[0] != 0)[0])
+        X_tr, y_tr = generate_biased_subsets_mtl(X_train, train_phenotype_dict.values(), id_train, x_ctrl_train,
+                                                 nsubset_ctrl, nsubset_biased, ncell, to_keep,
+                                                 id_ctrl=np.where(train_phenotype_dict[0] == 0)[0],
+                                                 id_biased=np.where(train_phenotype_dict[0] != 0)[0])
         # save those because it takes long to generate
         # np.save(os.path.join(outdir, 'X_tr.npy'), X_tr)
         # np.save(os.path.join(outdir, 'y_tr.npy'), y_tr)
@@ -383,10 +380,10 @@ def train_model(train_samples, train_phenotypes, outdir,
                 nsubset_biased.append(nsubset // np.sum(valid_phenotype_dict[0] == pheno))
 
             to_keep = int(0.1 * (X_valid.shape[0] / len(valid_phenotype_dict[0])))
-            X_v, y_v = generate_biased_subsets(X_valid, valid_phenotype_dict[0], id_valid, x_ctrl_valid,
-                                               nsubset_ctrl, nsubset_biased, ncell, to_keep,
-                                               id_ctrl=np.where(valid_phenotype_dict[0] == 0)[0],
-                                               id_biased=np.where(valid_phenotype_dict[0] != 0)[0])
+            X_v, y_v = generate_biased_subsets_mtl(X_valid, valid_phenotype_dict.values(), id_valid, x_ctrl_valid,
+                                                   nsubset_ctrl, nsubset_biased, ncell, to_keep,
+                                                   id_ctrl=np.where(valid_phenotype_dict[0] == 0)[0],
+                                                   id_biased=np.where(valid_phenotype_dict[0] != 0)[0])
             # save those because it takes long to generate
             # np.save(os.path.join(outdir, 'X_v.npy'), X_v)
             # np.save(os.path.join(outdir, 'y_v.npy'), y_v)
@@ -401,13 +398,11 @@ def train_model(train_samples, train_phenotypes, outdir,
     else:
         # generate 'nsubset' multi-cell inputs per input sample
         if per_sample:  # for regression
-            y_inputs_train = train_phenotype_dict.values()
-            X_tr, y_tr = generate_subsets_mtl(X_train, y_inputs_train, id_train,
+            X_tr, y_tr = generate_subsets_mtl(X_train, train_phenotype_dict.values(), id_train,
                                               nsubset, ncell, per_sample)
 
             if (valid_samples is not None) or generate_valid_set:
-                y_inputs_valid = valid_phenotype_dict.values()
-                X_v, y_v = generate_subsets_mtl(X_valid, y_inputs_valid, id_valid,
+                X_v, y_v = generate_subsets_mtl(X_valid, valid_phenotype_dict.values(), id_valid,
                                                 nsubset, ncell, per_sample)
 
         # generate 'nsubset' multi-cell inputs per class
@@ -416,30 +411,30 @@ def train_model(train_samples, train_phenotypes, outdir,
             for pheno in range(len(np.unique(train_phenotype_dict[0]))):
                 nsubset_list.append(nsubset // np.sum(
                     train_phenotype_dict[0] == pheno))  # out of this we will pick the amount of subsets
-            X_tr, y_tr = generate_subsets_mtl(X_train, train_phenotype_dict[0], id_train,
+            X_tr, y_tr = generate_subsets_mtl(X_train, train_phenotype_dict.values(), id_train,
                                               nsubset_list, ncell, per_sample)
-            # todo nsubset_list[0] to get the values of the list so i get an array in return of a certain shape:
+
             # check if listr elements usually differ from each other (if so we got a label imbalance here!). As well i play around with per_sample,
             if (valid_samples is not None) or generate_valid_set:
                 nsubset_list = []
                 for pheno in range(len(np.unique(valid_phenotype_dict[0]))):
                     nsubset_list.append(nsubset // np.sum(valid_phenotype_dict[0] == pheno))
-                X_v, y_v = generate_subsets_mtl(X_valid, valid_phenotype_dict[0], id_valid,
+                X_v, y_v = generate_subsets_mtl(X_valid, valid_phenotype_dict.values(), id_valid,
                                                 nsubset_list, ncell, per_sample)
 
         # since my freq tasks are all regression i just add for all further tasks the  regression version of it
-        for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
-            input_subsets = int(len(X_tr) / len(train_phenotype_dict[0]))
-            _, y_tr_task = generate_subsets_mtl(X_train, train_phenotype_dict[task_nr], id_train,
-                                                nsubsets=input_subsets, ncell=ncell, per_sample=True)
-            y_tr.append(y_tr_task[0])
-
-        if (valid_samples is not None) or generate_valid_set:
-            for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
-                input_subsets = int(len(X_v) / len(valid_phenotype_dict[0]))
-                _, y_v_task = generate_subsets_mtl(X_valid, valid_phenotype_dict[task_nr], id_valid,
-                                                   nsubsets=input_subsets, ncell=ncell, per_sample=True)
-                y_v.append(y_v_task[0])
+        # for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
+        #     input_subsets = int(len(X_tr) / len(train_phenotype_dict[0]))
+        #     _, y_tr_task = generate_subsets_mtl(X_train, train_phenotype_dict[task_nr], id_train,
+        #                                         nsubsets=input_subsets, ncell=ncell, per_sample=True)
+        #     y_tr.append(y_tr_task[0])
+        #
+        # if (valid_samples is not None) or generate_valid_set:
+        #     for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
+        #         input_subsets = int(len(X_v) / len(valid_phenotype_dict[0]))
+        #         _, y_v_task = generate_subsets_mtl(X_valid, valid_phenotype_dict[task_nr], id_valid,
+        #                                            nsubsets=input_subsets, ncell=ncell, per_sample=True)
+        #         y_v.append(y_v_task[0])
     logger.info("Done.")
 
     # neural network configuration
@@ -453,8 +448,8 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     if not regression:
         n_classes = len(np.unique(train_phenotype_dict[0]))  # since the first input need to be the phenotype
-        y_tr[0] = keras.utils.to_categorical(y_tr[0], n_classes)
-        y_v[0] = keras.utils.to_categorical(y_v[0], n_classes)
+        y_tr[0] = tf.keras.utils.to_categorical(y_tr[0], n_classes)
+        y_v[0] = tf.keras.utils.to_categorical(y_v[0], n_classes)
 
     # train some neural networks with different parameter configurations
     accuracies = np.zeros(nrun)
@@ -497,7 +492,7 @@ def train_model(train_samples, train_phenotypes, outdir,
             check = callbacks.ModelCheckpoint(filepath, monitor='val_loss', save_best_only=True,
                                               mode='auto')  # des saved the models
             earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
-            loss_history = LossHistory(outdir=outdir, irun=irun)
+            loss_history = LossHistory(outdir=f'{outdir}/plots', irun=irun)
             csv_logger = CSVLogger(f'{outdir}/stats/training.log', separator=',', append=True)
             tensorboard = TensorBoard(log_dir=f'{outdir}/stats/tensorboard/{model.name}_{time()}')
 
@@ -506,13 +501,13 @@ def train_model(train_samples, train_phenotypes, outdir,
             np.seterr('raise')
             hist = model.fit([X_tr, *y_trains], y_trains,
                              epochs=max_epochs, batch_size=bs,
-                             callbacks=[earlyStopping, check],
+                             callbacks=[earlyStopping, check, tensorboard, csv_logger, loss_history],
                              validation_data=([X_v, *y_valids], y_valids), verbose=verbose)
-            tf.keras.utils.plot_model(model, to_file='model.png', show_shapes=True, show_dtype=True)
+            tf.keras.utils.plot_model(model, to_file=f'{outdir}/plots/model_graph.png', show_shapes=True,
+                                      show_dtype=True)
             # load the model from the epoch with highest validation accuracy
             # tensorboard, csv_logger, loss_history,
             model.load_weights(filepath)
-            # print('My custom loss: ', model.compiled_loss._get_loss_object(model.compiled_loss._losses).fn)
 
             valid_metric_results = dict()
             if not regression:
@@ -548,7 +543,6 @@ def train_model(train_samples, train_phenotypes, outdir,
             sys.stderr.write(str(e) + '\n')
 
     # the top 3 performing networks
-    ### todo maybe embed the freq performance as well ???
     model_sorted_idx = np.argsort(accuracies)[::-1][:3]
     best_3_nets = [w_store[i] for i in model_sorted_idx]
     best_net = best_3_nets[0]
@@ -617,39 +611,6 @@ def init_phenotype_dict(mtl_tasks, phenotypes):
     return dict
 
 
-# inheriting from Layer would allow automated gradient backpropagation that is not available for Callback
-def get_listed_loss_by_shape(y_true, y_pred):
-    if y_true.shape[1] == 2:
-        # classification
-        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits=y_pred, labels=y_true)
-        return tf.reduce_mean(cross_entropy, name='loss')
-    else:
-        return tf.reduce_mean(tf.reduce_sum(tf.abs(tf.subtract(y_pred, y_true)), axis=-1))
-
-
-def get_mtl_loss(loss_list, sigmas):
-    print('loss wrapper')
-
-    def loss_fn(y_true, y_pred):
-        print('loss fn called')
-        print(y_true)
-        print(y_pred)
-        loss = 0.
-        # evtl die richtigen loss funktions nehmen...
-        for i in range(0, len(loss_list)):
-            sigma_sq = tf.pow(sigmas[i], 2)
-            factor = tf.math.divide_no_nan(1.0, tf.multiply(2.0, sigma_sq))
-            print(y_true)
-            print(y_pred)
-            listed_loss = get_listed_loss_by_shape(y_true, y_pred)
-            print(f'listed_loss task {i} is {listed_loss}')
-            loss = tf.add(loss, tf.add(tf.multiply(factor, listed_loss), tf.math.log(tf.add(1., sigma_sq))))
-            print(loss)
-        return loss
-
-    return loss_fn
-
-
 def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                 k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl_tasks=1):
     """ Builds the neural network architecture """
@@ -675,32 +636,27 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     # todo opt it a little by adding dicts with name: metric to the complie statement
 
     # network prediction output
-    losses = []
-    metrics = []
-    output_layers = []
-
+    losses, metrics, output_layers = [], [], []
+    pheno_task_name = 'phenotype'
     if not regression:
         losses.append(tf.keras.losses.CategoricalCrossentropy())  # for phenotype
-        metrics.append(['accuracy'])
-        for task in range(1, mtl_tasks):
-            losses.append(keras.losses.MeanSquaredError())
-            metrics.append(['mean_squared_error', tfa.metrics.r_square.RSquare(dtype=tf.float32, y_shape=(1,))])
+        metrics.append(['accuracy', tf.keras.metrics.Precision(),  tf.keras.metrics.Recall()])
+        # append regression frequency tasks
         output = layers.Dense(units=n_classes,
                               activation='softmax',
                               kernel_initializer=initializers.RandomUniform(),
                               kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
-                              name='output_desease')(pooled)
-        y_pheno = layers.Input(shape=(2,), name='input_desease')
+                              name=f'{pheno_task_name}_pred')(pooled)
+        y_pheno = layers.Input(shape=(2,), name=f'{pheno_task_name}_true')
     else:
-        for task in range(mtl_tasks):
-            losses.append(keras.losses.MeanSquaredError())
-            metrics.append(['mean_squared_error', tfa.metrics.r_square.RSquare(dtype=tf.float32, y_shape=(1,))])
+        losses.append(keras.losses.MeanSquaredError())
+        metrics.append(['mean_squared_error', tfa.metrics.r_square.RSquare(dtype=tf.float32, y_shape=(1,))])
         output = layers.Dense(units=1,
                               activation='linear',
                               kernel_initializer=initializers.RandomUniform(),
                               kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
-                              name='output_desease')(pooled)
-        y_pheno = layers.Input(shape=(1,), name='input_desease')
+                              name=f'{pheno_task_name}_pred')(pooled)
+        y_pheno = layers.Input(shape=(1,), name=f'{pheno_task_name}_true')
 
     output_layers.append(output)
 
@@ -709,36 +665,40 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     # todo make it not mandadorty to put pheno first
     y_task_inputs = dict()
 
+    # the rest is filled with regression freq. tasks
     for task in range(1, mtl_tasks):
+        taskname = f'input_task_{task}'
+        losses.append(keras.losses.MeanSquaredError())
+        metrics.append(['mean_squared_error', tfa.metrics.r_square.RSquare(dtype=tf.float32, y_shape=(1,))])
         layer = layers.Dense(units=1,
                              activation='linear',
                              kernel_initializer=initializers.RandomUniform(),
                              kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
-                             name=f'output_freq_{task}')(pooled)
+                             name=f'{taskname}_pred')(pooled)
         output_layers.append(layer)
-        y_task_inputs[f'task_{task}'] = layers.Input(shape=(1,), name=f'input_task_{task}')
+        y_task_inputs[f'{taskname}_true'] = layers.Input(shape=(1,), name=f'{taskname}_true')
 
     # dynamically defining the inputs, the user needs to insert as many as tasks (obviously...)
     # todo is there any solution that solves this better (by taking the y_train´´ as those )
-    # accoring to https://towardsdatascience.com/solving-the-tensorflow-keras-model-loss-problem-fd8281aeeb11 it is mandatory to add y_trues as inputs...
-    # but also it recommends the endpoint loss layer, that mi9ght be just what i wanted
+    # accoring to https://towardsdatascience.com/solving-the-tensorflow-keras-model-loss-problem-fd8281aeeb11
+    # it is mandatory to add y_trues as inputs...
+    # but also it recommends the endpoint loss layer, that might be just what i wanted
     sigmas = []
     sigma_init = tf.random_uniform_initializer(minval=0.2, maxval=1.)
     for i in range(len(losses)):
-        sigma = tf.Variable(name=f'sigmas_sq_{i}', dtype=tf.float32,
-                            initial_value=sigma_init(shape=(), dtype='float32'), trainable=True)
+        sigma = tf.Variable(name=f'sigma_{i}', dtype=tf.float32, initial_value=sigma_init(shape=(), dtype='float32'),
+                            trainable=True)
         sigmas.append(sigma)
 
     out = RevisedUncertaintyLossV2(loss_list=losses, sigmas=sigmas)([y_pheno, *y_task_inputs.values(), *output_layers])
     model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=out)
-
     model.compile(optimizer=optimizers.Adam(learning_rate=lr),
                   metrics=metrics)
-    # get_mtl_loss(loss_list=losses, sigmas=sigmas)
-    # metrics are a list of lists, first LIST is for first output and so on...
-    # totest removal of metrics
-    # todo  assert stuff
 
+    # metrics are a list of lists, first LIST is for first output and so on...
+    assert len(model.inputs) == mtl_tasks+1 # X and the true labels
+    assert len(metrics) == mtl_tasks # one per task
+    assert len(losses) == mtl_tasks # one per task
     return model
 
 

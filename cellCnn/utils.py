@@ -142,6 +142,7 @@ def cluster_tightness(data, metric='cosine'):
     return np.mean(pairwise_kernels(data, centroid, metric=metric))
 
 
+#param_dict refers to the weight of the best 3 nets
 def cluster_profiles(param_dict, nmark, accuracies, accur_thres=.99,
                      dendrogram_cutoff=.5):
     accum = []
@@ -161,6 +162,7 @@ def cluster_profiles(param_dict, nmark, accuracies, accur_thres=.99,
     clusters = fcluster(Z, dendrogram_cutoff, criterion='distance') - 1
     c = Counter(clusters)
     cons = []
+    # if in any are more then one cluster...
     for key, val in c.items():
         if val > 1:
             members = w_strong[clusters == key]
@@ -226,14 +228,12 @@ def per_sample_subsets(X, nsubsets, ncell_per_subset, k_init=False):
 
 
 # todo pheno map is a list of the prev pheno map now!
-def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
-                         per_sample=False, k_init=False):
-    S = dict()  # dict aller label zu subsets per sample
+def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell, per_sample=False, k_init=False):
+    S = dict()  # dict of all labels to subsets per sample
     n_out = len(np.unique(sample_id))
 
     for ylabel in range(n_out):
         X_i = filter_per_class(X, sample_id, ylabel)
-        # regression
         if per_sample:
             S[ylabel] = per_sample_subsets(X_i, nsubsets, ncell, k_init)
         else:
@@ -245,6 +245,7 @@ def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
     for y_i, x_i in S.items():
         data_list.append(x_i)
         y_values = []
+        # if there is a list in the pheno map, we know we´re in a mtl setting and we iterate through all maps
         if any(isinstance(single_map, np.ndarray) or isinstance(single_map, list) for single_map in pheno_map):
             for single_map in pheno_map:
                 y_values.append(single_map[y_i] * np.ones(x_i.shape[0], dtype=int))
@@ -258,13 +259,12 @@ def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell,
         y_values = [yt[i] for i in range(len(pheno_map))]
     else:
         y_values = yt
-    Xt, *y_args = sku.shuffle(Xt,
-                              *y_values)  # i dont swap this because i want all elements to be shuffled, not just the labels ...
+    Xt, *y_args = sku.shuffle(Xt, *y_values)
+    # dont swap this because we want all elements to be shuffled, not just the labels ...
     return Xt, y_args
 
 
-def generate_subsets(X, pheno_map, sample_id, nsubsets, ncell,
-                     per_sample=False, k_init=False):
+def generate_subsets(X, pheno_map, sample_id, nsubsets, ncell, per_sample=False, k_init=False):
     S = dict()
     n_out = len(np.unique(sample_id))
 
@@ -302,6 +302,41 @@ def per_sample_biased_subsets(X, x_ctrl, nsubsets, ncell_final, to_keep, ratio_b
         Xres[i] = np.vstack([x_biased, x_unbiased]).T
     return Xres
 
+
+def generate_biased_subsets_mtl(X, pheno_map, sample_id, x_ctrl, nsubset_ctrl, nsubset_biased,
+                            ncell_final, to_keep, id_ctrl, id_biased):
+    S = dict()
+    pheno_map = list(pheno_map)
+    for ylabel in id_biased:
+        X_i = filter_per_class(X, sample_id, ylabel)
+        n = nsubset_biased[pheno_map[0][ylabel]]
+        S[ylabel] = per_sample_biased_subsets(X_i, x_ctrl, n,
+                                              ncell_final, to_keep, 0.5)
+    for ylabel in id_ctrl:
+        X_i = filter_per_class(X, sample_id, ylabel)
+        S[ylabel] = per_sample_subsets(X_i, nsubset_ctrl, ncell_final, k_init=False)
+
+    # mix them
+    data_list, y_list = [], []
+    for y_i, x_i in S.items():
+        data_list.append(x_i)
+        y_values = []
+        # if there is a list in the pheno map, we know we´re in a mtl setting and we iterate through all maps
+        if any(isinstance(single_map, np.ndarray) or isinstance(single_map, list) for single_map in pheno_map):
+            for single_map in pheno_map:
+                y_values.append(single_map[y_i] * np.ones(x_i.shape[0], dtype=int))
+        else:
+            y_values.append(pheno_map[y_i] * np.ones(x_i.shape[0], dtype=int))
+        y_list.append(tuple(y_values))
+    Xt = np.vstack(data_list)
+    yt = np.hstack(y_list)
+
+    if any(isinstance(single_map, np.ndarray) or isinstance(single_map, list) for single_map in pheno_map):
+        y_values = [yt[i] for i in range(len(pheno_map))]
+    else:
+        y_values = yt
+    Xt, *y_args = sku.shuffle(Xt, *y_values)
+    return Xt, y_args
 
 def generate_biased_subsets(X, pheno_map, sample_id, x_ctrl, nsubset_ctrl, nsubset_biased,
                             ncell_final, to_keep, id_ctrl, id_biased):

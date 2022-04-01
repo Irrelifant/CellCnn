@@ -4,9 +4,8 @@ from matplotlib import pyplot as plt
 
 class LossHistory(keras.callbacks.Callback):
     def __init__(self, outdir='/default_outdir', irun=0):
-        self.outdir = outdir
         self.irun = irun
-        self.plotdir = os.path.join(outdir, 'plots')
+        self.plotdir = outdir
         os.makedirs(self.plotdir, exist_ok=True)
 
     def on_train_begin(self, logs=None):
