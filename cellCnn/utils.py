@@ -83,6 +83,11 @@ def save_results(results, outdir, labels):
     w = pd.DataFrame(results['clustering_result']['w'], columns=labels_)
     w.to_csv(os.path.join(csv_dir, 'filters_all.csv'), index=False)
 
+    # to get a little more information
+    results_log_path = os.path.join(csv_dir, 'results.csv')
+    w = pd.DataFrame.from_dict(results)
+    w.to_csv(results_log_path, index=False)
+
 
 def get_items(l, idx):
     return [l[i] for i in idx]
@@ -411,9 +416,11 @@ def get_selected_cells(filter_w, data, scaler=None, filter_response_thres=0,
     if scaler is not None:
         data = scaler.transform(data)
     w, b = filter_w[:nmark], filter_w[nmark]
-    g = np.sum(w.reshape(1, -1) * data, axis=1) + b
+    w_reshaped = w.reshape(1, -1)
+    g = np.sum(w_reshaped * data, axis=1) + b
     if export_continuous:
-        g = relu(g).reshape(-1, 1)
+        g_relu = relu(g)
+        g = g_relu.values.reshape(-1, 1)
         g_thres = (g > filter_response_thres).reshape(-1, 1)
         return np.hstack([g, g_thres])
     else:
