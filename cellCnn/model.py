@@ -239,12 +239,29 @@ class CellCnn(object):
             new_samples = [shuffle(x)[:ncell_per_sample].reshape(1, ncell_per_sample, nmark)
                            for x in new_samples]
             data_test = np.vstack(new_samples)
-            prediction = model.predict([data_test, *mtl_inputs])
-            # prediction = model.predict(data_test)
+            # todo fix it for stl
+            ## this is there to solve numpy array conversion to tensor error
+            data_test = np.asarray([np.asarray(x).astype(np.float64) for x in data_test])
+
+            # since i still need at least one input if i got my mtl model
+            if len(mtl_inputs) > 1:
+                for i, task in enumerate(mtl_inputs):
+                    # todo is there any better way to get classification vs regression difference ?
+                    if isinstance(task[0], int):
+                        # classification
+                        nclasses = len(np.unique(task))
+                        mtl_inputs[i] = tf.keras.utils.to_categorical(task, nclasses)
+                    else:
+                        mtl_inputs[i] = np.asarray(task).astype(np.float64)
+                prediction = model.predict([data_test, *mtl_inputs])
+            else:
+                prediction = model.predict(data_test, mtl_inputs[0])
+
             y_pred[i_enum] = prediction
 
         if self.mtl_tasks == 1:
-            result = np.mean(y_pred, axis=0)
+            results_as_np = np.array(list(y_pred.values()))
+            result = np.mean(results_as_np, axis=0)
         else:
             result = []
             for task_nr in range(self.mtl_tasks):
@@ -421,20 +438,6 @@ def train_model(train_samples, train_phenotypes, outdir,
                     nsubset_list.append(nsubset // np.sum(valid_phenotype_dict[0] == pheno))
                 X_v, y_v = generate_subsets_mtl(X_valid, valid_phenotype_dict.values(), id_valid,
                                                 nsubset_list, ncell, per_sample)
-
-        # since my freq tasks are all regression i just add for all further tasks the  regression version of it
-        # for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
-        #     input_subsets = int(len(X_tr) / len(train_phenotype_dict[0]))
-        #     _, y_tr_task = generate_subsets_mtl(X_train, train_phenotype_dict[task_nr], id_train,
-        #                                         nsubsets=input_subsets, ncell=ncell, per_sample=True)
-        #     y_tr.append(y_tr_task[0])
-        #
-        # if (valid_samples is not None) or generate_valid_set:
-        #     for task_nr in range(1, mtl_tasks):  # here i basically add the regression tasks to y_tr as well
-        #         input_subsets = int(len(X_v) / len(valid_phenotype_dict[0]))
-        #         _, y_v_task = generate_subsets_mtl(X_valid, valid_phenotype_dict[task_nr], id_valid,
-        #                                            nsubsets=input_subsets, ncell=ncell, per_sample=True)
-        #         y_v.append(y_v_task[0])
     logger.info("Done.")
 
     # neural network configuration
@@ -453,7 +456,6 @@ def train_model(train_samples, train_phenotypes, outdir,
 
     # train some neural networks with different parameter configurations
     accuracies = np.zeros(nrun)
-    frequency_loss = dict()
     w_store = dict()
     config = dict()
     config['nfilter'] = []
@@ -493,25 +495,40 @@ def train_model(train_samples, train_phenotypes, outdir,
                                               mode='auto')  # des saved the models
             earlyStopping = callbacks.EarlyStopping(monitor='val_loss', patience=patience, mode='auto')
             loss_history = LossHistory(outdir=f'{outdir}/plots', irun=irun)
-            csv_logger = CSVLogger(f'{outdir}/stats/training.log', separator=',', append=True)
+            csv_logger = CSVLogger(f'{outdir}/stats/training.csv', separator=',', append=True)
             tensorboard = TensorBoard(log_dir=f'{outdir}/stats/tensorboard/{model.name}_{time()}')
 
             y_trains = [y_tr[task] for task in range(mtl_tasks)]
             y_valids = [y_v[task] for task in range(mtl_tasks)]
             np.seterr('raise')
-            hist = model.fit([X_tr, *y_trains], y_trains,
-                             epochs=max_epochs, batch_size=bs,
-                             callbacks=[earlyStopping, check, tensorboard, csv_logger, loss_history],
-                             validation_data=([X_v, *y_valids], y_valids), verbose=verbose)
+
+            # todo this sucks ... i need to do it like that since if i feed in a list of soze one as y label,
+            #  i get a tuple for t_true and it doesn´´ get a shepe from it in compile_utils.py (tf bug) ?
+            if mtl_tasks == 1:
+                history = model.fit(X_tr, y_trains[0],
+                                 epochs=max_epochs, batch_size=bs,
+                                 callbacks=[earlyStopping, check, tensorboard, csv_logger, loss_history],
+                                 validation_data=(X_v, y_valids[0]), verbose=verbose)
+            else:
+                history = model.fit([X_tr, *y_trains], y_trains,
+                                 epochs=max_epochs, batch_size=bs,
+                                 callbacks=[earlyStopping, check, tensorboard, csv_logger, loss_history],
+                                 validation_data=([X_v, *y_valids], y_valids), verbose=verbose)
             tf.keras.utils.plot_model(model, to_file=f'{outdir}/plots/model_graph.png', show_shapes=True,
                                       show_dtype=True)
+
+            numpy_loss_history = np.array(history.history['loss'])
+            np.savetxt("loss_history.txt", numpy_loss_history, delimiter=",")
+
             # load the model from the epoch with highest validation accuracy
             # tensorboard, csv_logger, loss_history,
             model.load_weights(filepath)
-
             valid_metric_results = dict()
             if not regression:
-                valid_metric = model.evaluate([X_v, *y_valids], y_valids)
+                if mtl_tasks == 1:
+                    valid_metric = model.evaluate(X_v, y_valids)
+                else:
+                    valid_metric = model.evaluate([X_v, *y_valids], y_valids)
 
                 if isinstance(valid_metric, list):
                     valid_metric_results = {i: metric for i, metric in enumerate(valid_metric)}
@@ -520,8 +537,12 @@ def train_model(train_samples, train_phenotypes, outdir,
                 else:
                     valid_metric_results[0] = valid_metric
             else:
-                train_metric = model.evaluate([X_tr, *y_trains], y_trains, batch_size=bs)
-                valid_metric = model.evaluate([X_v, *y_valids], y_trains, batch_size=bs)
+                if mtl_tasks == 1:
+                    train_metric = model.evaluate(X_tr, y_trains, batch_size=bs)
+                    valid_metric = model.evaluate(X_v, y_trains, batch_size=bs)
+                else:
+                    train_metric = model.evaluate([X_tr, *y_trains], y_trains, batch_size=bs)
+                    valid_metric = model.evaluate([X_v, *y_valids], y_trains, batch_size=bs)
 
                 if isinstance(valid_metric, list):
                     valid_metric_results = {i: metric for i, metric in enumerate(valid_metric)}
@@ -551,13 +572,14 @@ def train_model(train_samples, train_phenotypes, outdir,
     # weights from the best-performing network
     w_best_net = keras_param_vector(best_net)
 
+    #todo check if losses match accuracies (+/- ... )
     # post-process the learned filters
-    # cluster weights from all networks that achieved accuracy above the specified thershold
+    # cluster weights from all networks that achieved losses above the specified thershold
     w_cons, cluster_res = cluster_profiles(w_store, nmark, accuracies, accur_thres,
                                            dendrogram_cutoff=dendrogram_cutoff)
     results = {
         'clustering_result': cluster_res,
-        'selected_filters': w_cons,
+        'selected_filters': w_cons, # filters that are representatives of the cluster (with members > 2)        i = np.argmax(np.sum(pairwise_kernels(data, metric=metric), axis=1))
         'best_net': best_net,
         'best_3_nets': best_3_nets,
         'w_best_net': w_best_net,
@@ -565,7 +587,8 @@ def train_model(train_samples, train_phenotypes, outdir,
         'best_model_index': best_accuracy_idx,
         'config': config,
         'scaler': z_scaler,
-        'n_classes': n_classes
+        'n_classes': n_classes,
+        'best_3_nets_ids': model_sorted_idx
     }
 
     if (valid_samples is not None) and (w_cons is not None):
@@ -581,6 +604,7 @@ def train_model(train_samples, train_phenotypes, outdir,
                 if task == 0:  # this is mainly here for keeping the "old" output the same (STL way)
                     results['filter_diff'] = filter_diff
                 else:
+                    # if there ever will be an additional classification task
                     results[f'filter_diff_{task}'] = filter_diff
             else:
                 # regression task
@@ -640,7 +664,7 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     pheno_task_name = 'phenotype'
     if not regression:
         losses.append(tf.keras.losses.CategoricalCrossentropy())  # for phenotype
-        metrics.append(['accuracy', tf.keras.metrics.Precision(),  tf.keras.metrics.Recall()])
+        metrics.append(['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()])
         # append regression frequency tasks
         output = layers.Dense(units=n_classes,
                               activation='softmax',
@@ -683,22 +707,30 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     # accoring to https://towardsdatascience.com/solving-the-tensorflow-keras-model-loss-problem-fd8281aeeb11
     # it is mandatory to add y_trues as inputs...
     # but also it recommends the endpoint loss layer, that might be just what i wanted
-    sigmas = []
-    sigma_init = tf.random_uniform_initializer(minval=0.2, maxval=1.)
-    for i in range(len(losses)):
-        sigma = tf.Variable(name=f'sigma_{i}', dtype=tf.float32, initial_value=sigma_init(shape=(), dtype='float32'),
-                            trainable=True)
-        sigmas.append(sigma)
 
-    out = RevisedUncertaintyLossV2(loss_list=losses, sigmas=sigmas)([y_pheno, *y_task_inputs.values(), *output_layers])
-    model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=out)
-    model.compile(optimizer=optimizers.Adam(learning_rate=lr),
-                  metrics=metrics)
+    if mtl_tasks > 1:
+        sigmas = []
+        sigma_init = tf.random_uniform_initializer(minval=0.2, maxval=1.)
+        for i in range(len(losses)):
+            sigma = tf.Variable(name=f'sigma_{i}', dtype=tf.float32,
+                                initial_value=sigma_init(shape=(), dtype='float32'),
+                                trainable=True)
+            sigmas.append(sigma)
 
+        out = RevisedUncertaintyLossV2(loss_list=losses, sigmas=sigmas)(
+            [y_pheno, *y_task_inputs.values(), *output_layers])
+        model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=out)
+        model.compile(optimizer=optimizers.Adam(learning_rate=lr),
+                      metrics=metrics)
+        assert len(model.inputs) == mtl_tasks + 1  # X and the true labels
+        assert len(metrics) == mtl_tasks  # one per task
+        assert len(losses) == mtl_tasks  # one per task
+    else:
+        model = keras.Model(inputs=data_input, outputs=output_layers)
+        model.compile(optimizer=optimizers.Adam(learning_rate=lr),
+                      loss=losses,
+                      metrics=metrics)
     # metrics are a list of lists, first LIST is for first output and so on...
-    assert len(model.inputs) == mtl_tasks+1 # X and the true labels
-    assert len(metrics) == mtl_tasks # one per task
-    assert len(losses) == mtl_tasks # one per task
     return model
 
 

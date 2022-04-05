@@ -39,7 +39,6 @@ class RevisedUncertaintyLossV2(Layer):
 
             loss = tf.add(loss, tf.add(tf.multiply(factor, listed_loss), tf.math.log(tf.add(1., sigma_sq))))
         return loss
-    # todo investigate
 
     def get_config(self):
         config = super().get_config()
@@ -58,4 +57,3 @@ class RevisedUncertaintyLossV2(Layer):
         loss = self.get_mtl_loss(ys_true, ys_pred)
         self.add_loss(loss, inputs=inputs)
         return ys_pred
-        # output doesn´t really matter -> apparently it does since that is what my out will be...
