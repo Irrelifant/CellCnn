@@ -13,7 +13,6 @@ from time import time
 
 import keras.backend
 import keras.utils
-import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 import tensorflow_addons as tfa
@@ -207,8 +206,6 @@ class CellCnn(object):
 
         # z-transform the new samples if we did that for the training samples
         scaler = self.results['scaler']
-        # todo Problem: der sclaar ist gefitted auf dim 2 und wir geben hier dim 3 rein (oben wird combine_samples()
-        #  gemacht, wieso is des ohne mtl nicht aufs maul gefallen ? )
         if scaler is not None:
             new_samples = copy.deepcopy(new_samples)
             new_samples = [scaler.transform(x) for x in new_samples]
@@ -251,16 +248,14 @@ class CellCnn(object):
             data_test = np.asarray([np.asarray(x).astype(np.float64) for x in data_test])
 
             # since i still need at least one input if i got my mtl model
-
             if len(mtl_inputs) > 1:
                 for i, task in enumerate(mtl_inputs):
-                    # todo is there any better way to get classification vs regression difference ?
-                    if i == 0 and self.regression:
+                    if i == 0 and not self.regression:
                         # classification
                         nclasses = len(np.unique(task))
                         mtl_inputs[i] = tf.keras.utils.to_categorical(task, nclasses)
                     else:
-                        # if i is not 0 its definately a regression task
+                        # if i != 0 its definately a regression task
                         mtl_inputs[i] = np.asarray(task).astype(np.float64)
 
                 prediction = model.predict([data_test, *mtl_inputs])
@@ -511,7 +506,7 @@ def train_model(train_samples, train_phenotypes, outdir,
             np.seterr('raise')
 
             # todo this sucks ... i need to do it like that since if i feed in a list of soze one as y label,
-            #  i get a tuple for t_true and it doesn´´ get a shepe from it in compile_utils.py (tf bug) ?
+            #  i get a tuple for t_true and it doesn´t get a shepe from it in compile_utils.py (tf bug) ?
             if mtl_tasks == 1:
                 history = model.fit(X_tr, y_trains[0],
                                     epochs=max_epochs, batch_size=bs,
@@ -666,8 +661,6 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     if dropout or ((dropout == 'auto') and (nfilter > 5)):
         pooled = layers.Dropout(rate=dropout_p)(pooled)
 
-    # todo opt it a little by adding dicts with name: metric to the complie statement
-
     # network prediction output
     losses, metrics, output_layers = [], [], []
     pheno_task_name = 'phenotype'
@@ -710,11 +703,12 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
         output_layers.append(layer)
         y_task_inputs[f'{taskname}_true'] = layers.Input(shape=(1,), name=f'{taskname}_true')
 
-    # dynamically defining the inputs, the user needs to insert as many as tasks (obviously...)
     # todo is there any solution that solves this better (by taking the y_train´´ as those )
+    # Stackoverflow opened: https://stackoverflow.com/questions/71650952/keras-way-to-use-model-fit%c2%b4s-y-parameter-as-y-true-in-customized-loss-layer-of-m
     # accoring to https://towardsdatascience.com/solving-the-tensorflow-keras-model-loss-problem-fd8281aeeb11
     # it is mandatory to add y_trues as inputs...
 
+    # dynamically defining the inputs, the user needs to insert as many as tasks (obviously...)
     if mtl_tasks > 1 and loss_mode == 'revised_uncertainty':
         sigmas = []
         sigma_init = tf.random_uniform_initializer(minval=0.2, maxval=1.)

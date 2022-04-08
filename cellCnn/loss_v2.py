@@ -1,7 +1,17 @@
 from keras.layers import Layer
 import tensorflow as tf
 
-#todo add description to loss layer
+""" 
+Author: Elias Schreiner
+
+This is a custom layer that should implement the Revised Uncertainty Loss (https://github.com/Mikoto10032/AutomaticWeightedLoss) 
+which is an extension to the uncertainty weighting by Kendall (https://github.com/ranandalon/mtl)
+
+Open Points:
+- check if metric added works as expected
+- check if we can mute the losses from the 2 input dense layers (as this layer should cover those 2)
+    - I assume that this needs further deepdive
+"""
 
 # inheriting from Layer would allow automated gradient backpropagation that is not available for Callback
 # similar to kendall´´ implementation
@@ -17,9 +27,8 @@ def get_listed_loss_by_shape(y_true, y_pred):
 
 
 class RevisedUncertaintyLossV2(Layer):
-    def __init__(self, loss_list, sigmas, *args, **kwargs):
+    def __init__(self, sigmas, *args, **kwargs):
         super(RevisedUncertaintyLossV2, self).__init__()
-        self.loss_list = loss_list
         self.sigmas = sigmas
 
     def get_sigmas(self):
@@ -27,8 +36,8 @@ class RevisedUncertaintyLossV2(Layer):
 
     def get_mtl_loss(self, ys_true, ys_pred):
         print('in mtl: split inputs')
-        assert len(ys_true) == len(self.loss_list)
-        assert len(ys_pred) == len(self.loss_list)
+        assert len(ys_true) == len(self.sigmas)
+        assert len(ys_pred) == len(self.sigmas)
         loss = 0.
         for i in range(0, len(self.loss_list)):
             sigma_sq = tf.pow(self.sigmas[i], 2)
@@ -45,7 +54,6 @@ class RevisedUncertaintyLossV2(Layer):
         # https://github.com/tensorflow/tensorflow/issues/28799 describes that you can only serialize numpys when saving the model (later we will save...)
         sigmas_to_save = [s.numpy() for s in self.sigmas]
         config.update({
-            "loss_list": self.loss_list,
             "sigmas": sigmas_to_save
         })
         return config

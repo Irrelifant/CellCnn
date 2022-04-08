@@ -199,6 +199,8 @@ def plot_results(results, samples, phenotypes, labels, outdir,
         g = np.sum(w.reshape(1, -1) * x, axis=1) + b
         g = g * (g > 0)
         # todo research why i dont consider anticorrelations
+        # - when plotting the filters cell populations i didn´´ detect noticable results
+        # - confirm this with further experiments...
 
         # skip a filter if it does not select any cell
         if np.max(g) <= 0:

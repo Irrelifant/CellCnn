@@ -227,7 +227,7 @@ def per_sample_subsets(X, nsubsets, ncell_per_subset, k_init=False):
     return Xres
 
 
-# todo pheno map is a list of the prev pheno map now!
+#pheno map is a list of the prev pheno map now!
 def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell, per_sample=False, k_init=False):
     S = dict()  # dict of all labels to subsets per sample
     n_out = len(np.unique(sample_id))
