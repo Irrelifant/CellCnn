@@ -9,6 +9,7 @@ class LossHistory(keras.callbacks.Callback):
         self.plotdir = outdir
         os.makedirs(self.plotdir, exist_ok=True)
 
+
     def on_train_begin(self, logs=None):
         self.sigmas = []
         self.losses = []
@@ -32,3 +33,4 @@ class LossHistory(keras.callbacks.Callback):
             plt.ylabel('Sigma')
             plt.legend()
             plt.savefig(f'{self.plotdir}/sigma_plot_{self.irun}.png')
+            plt.close()
