@@ -83,11 +83,6 @@ def save_results(results, outdir, labels):
     w = pd.DataFrame(results['clustering_result']['w'], columns=labels_)
     w.to_csv(os.path.join(csv_dir, 'filters_all.csv'), index=False)
 
-    # to get a little more information
-    results_log_path = os.path.join(csv_dir, 'results.csv')
-    w = pd.DataFrame.from_dict(results)
-    w.to_csv(results_log_path, index=False)
-
 
 def get_items(l, idx):
     return [l[i] for i in idx]
@@ -379,7 +374,7 @@ def single_filter_output(filter_params, valid_samples, mp):
         y_pred[i] = gpool
     return y_pred, np.argmax(w_out)
 
-
+# we try to measure the discriminative effect of filters among classes. might be an idea for my cell types ?
 def get_filters_classification(filters, scaler, valid_samples, valid_phenotypes, mp):
     y_true = np.array(valid_phenotypes)
     filter_diff = np.zeros(len(filters))
@@ -420,7 +415,7 @@ def get_selected_cells(filter_w, data, scaler=None, filter_response_thres=0,
     g = np.sum(w_reshaped * data, axis=1) + b
     if export_continuous:
         g_relu = relu(g)
-        g = g_relu.values.reshape(-1, 1)
+        g = g_relu.reshape(-1, 1)
         g_thres = (g > filter_response_thres).reshape(-1, 1)
         return np.hstack([g, g_thres])
     else:

@@ -13,6 +13,7 @@ from time import time
 
 import keras.backend
 import keras.utils
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 import tensorflow_addons as tfa
@@ -29,8 +30,9 @@ from cellCnn.utils import combine_samples, normalize_outliers_to_control, genera
 from cellCnn.utils import generate_biased_subsets, generate_biased_subsets_mtl
 from cellCnn.utils import get_filters_classification, get_filters_regression
 from cellCnn.utils import mkdir_p
-from loss_history import LossHistory
-from loss_v2 import RevisedUncertaintyLossV2
+from cellCnn.loss_history import LossHistory
+from cellCnn.loss_v2 import RevisedUncertaintyLossV2
+from cellCnn.plotting import plot_model_losses
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,10 @@ class CellCnn(object):
         - accur_thres :
             Keep filters from models achieving at least this accuracy. If less than 3
             models pass the accuracy threshold, keep filters from the best 3 models.
+        - mtl_tasks :
+            The amount of tasks that will be performed by the CellCNN model. The first task is currently always the phenotype related one, whilst following tasks will always be considered as regression tasks
+        - loss_mode :
+            The loss mode that will be followed. Only important in Multi-task learning. Currently toggleable between 'None', that will just take the summed average of the individual task losses. And 'revised_uncertainty' the will add an additional loss layer to calculate the losses in a revised fashing of Kendall´s uncertainty
     """
 
     def __init__(self, ncell=200, nsubset=1000, per_sample=False, subset_selection='random',
@@ -99,7 +105,7 @@ class CellCnn(object):
                  nfilter_choice=None, dropout='auto', dropout_p=.5,
                  coeff_l1=0, coeff_l2=0.0001, learning_rate=None,
                  regression=False, max_epochs=20, patience=5, nrun=15, dendrogram_cutoff=0.4,
-                 accur_thres=.95, verbose=1, mtl_tasks=1):
+                 accur_thres=.95, verbose=1, mtl_tasks=1, loss_mode=None):
 
         # initialize model attributes
         self.scale = scale
@@ -124,6 +130,7 @@ class CellCnn(object):
         self.verbose = verbose
         self.results = None
         self.mtl_tasks = mtl_tasks
+        self.loss_mode = loss_mode
 
     def fit(self, train_samples, train_phenotypes, outdir, valid_samples=None,
             valid_phenotypes=None, generate_valid_set=True):
@@ -226,7 +233,7 @@ class CellCnn(object):
                                 nfilter=nfilter, coeff_l1=0, coeff_l2=0,
                                 k=ncell_pooled, dropout=False, dropout_p=0,
                                 regression=self.regression, n_classes=n_classes,
-                                lr=0.01, mtl_tasks=self.mtl_tasks)
+                                lr=0.01, mtl_tasks=self.mtl_tasks, loss_mode=self.loss_mode)
 
             # and load the learned filter and output weights
             weights = self.results['best_3_nets'][i_enum]
@@ -239,23 +246,26 @@ class CellCnn(object):
             new_samples = [shuffle(x)[:ncell_per_sample].reshape(1, ncell_per_sample, nmark)
                            for x in new_samples]
             data_test = np.vstack(new_samples)
-            # todo fix it for stl
+
             ## this is there to solve numpy array conversion to tensor error
             data_test = np.asarray([np.asarray(x).astype(np.float64) for x in data_test])
 
             # since i still need at least one input if i got my mtl model
+
             if len(mtl_inputs) > 1:
                 for i, task in enumerate(mtl_inputs):
                     # todo is there any better way to get classification vs regression difference ?
-                    if isinstance(task[0], int):
+                    if i == 0 and self.regression:
                         # classification
                         nclasses = len(np.unique(task))
                         mtl_inputs[i] = tf.keras.utils.to_categorical(task, nclasses)
                     else:
+                        # if i is not 0 its definately a regression task
                         mtl_inputs[i] = np.asarray(task).astype(np.float64)
+
                 prediction = model.predict([data_test, *mtl_inputs])
             else:
-                prediction = model.predict(data_test, mtl_inputs[0])
+                prediction = model.predict(data_test)
 
             y_pred[i_enum] = prediction
 
@@ -280,7 +290,6 @@ def train_model(train_samples, train_phenotypes, outdir,
                 max_epochs=20, patience=5,
                 dendrogram_cutoff=0.4, accur_thres=.95, verbose=1, mtl_tasks=1):
     """ Performs a CellCnn analysis """
-
     train_phenotype_dict = init_phenotype_dict(mtl_tasks, train_phenotypes)
     valid_phenotype_dict = init_phenotype_dict(mtl_tasks, valid_phenotypes)
 
@@ -486,7 +495,6 @@ def train_model(train_samples, train_phenotypes, outdir,
                             coeff_l1, coeff_l2, k,
                             dropout, dropout_p, regression, n_classes, lr, mtl_tasks=mtl_tasks)
         print(model.summary())
-        # print('\nlosses:', model.losses)
 
         filepath = os.path.join(outdir, 'nnet_run_%d.hdf5' % irun)
         try:
@@ -506,19 +514,18 @@ def train_model(train_samples, train_phenotypes, outdir,
             #  i get a tuple for t_true and it doesn´´ get a shepe from it in compile_utils.py (tf bug) ?
             if mtl_tasks == 1:
                 history = model.fit(X_tr, y_trains[0],
-                                 epochs=max_epochs, batch_size=bs,
-                                 callbacks=[earlyStopping, check, tensorboard, csv_logger, loss_history],
-                                 validation_data=(X_v, y_valids[0]), verbose=verbose)
+                                    epochs=max_epochs, batch_size=bs,
+                                    callbacks=[earlyStopping, check, tensorboard, csv_logger, loss_history],
+                                    validation_data=(X_v, y_valids[0]), verbose=verbose)
             else:
                 history = model.fit([X_tr, *y_trains], y_trains,
-                                 epochs=max_epochs, batch_size=bs,
-                                 callbacks=[earlyStopping, check, tensorboard, csv_logger, loss_history],
-                                 validation_data=([X_v, *y_valids], y_valids), verbose=verbose)
+                                    epochs=max_epochs, batch_size=bs,
+                                    callbacks=[earlyStopping, check, tensorboard, csv_logger, loss_history],
+                                    validation_data=([X_v, *y_valids], y_valids), verbose=verbose)
             tf.keras.utils.plot_model(model, to_file=f'{outdir}/plots/model_graph.png', show_shapes=True,
                                       show_dtype=True)
-
-            numpy_loss_history = np.array(history.history['loss'])
-            np.savetxt("loss_history.txt", numpy_loss_history, delimiter=",")
+            plot_model_losses(history, f"{outdir}/stats/", irun)
+            np.savetxt(f"{outdir}/stats/loss_history.txt", np.array(history.history['loss']), delimiter=",")
 
             # load the model from the epoch with highest validation accuracy
             # tensorboard, csv_logger, loss_history,
@@ -570,16 +577,18 @@ def train_model(train_samples, train_phenotypes, outdir,
     best_accuracy_idx = model_sorted_idx[0]
 
     # weights from the best-performing network
+    # Not executeable with nfilters=[1]
     w_best_net = keras_param_vector(best_net)
 
-    #todo check if losses match accuracies (+/- ... )
+    # todo check if losses match accuracies (+/- ... )
     # post-process the learned filters
     # cluster weights from all networks that achieved losses above the specified thershold
     w_cons, cluster_res = cluster_profiles(w_store, nmark, accuracies, accur_thres,
                                            dendrogram_cutoff=dendrogram_cutoff)
     results = {
         'clustering_result': cluster_res,
-        'selected_filters': w_cons, # filters that are representatives of the cluster (with members > 2)        i = np.argmax(np.sum(pairwise_kernels(data, metric=metric), axis=1))
+        'selected_filters': w_cons,
+        # filters that are representatives of the cluster (with members > 2)        i = np.argmax(np.sum(pairwise_kernels(data, metric=metric), axis=1))
         'best_net': best_net,
         'best_3_nets': best_3_nets,
         'w_best_net': w_best_net,
@@ -636,7 +645,7 @@ def init_phenotype_dict(mtl_tasks, phenotypes):
 
 
 def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
-                k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl_tasks=1):
+                k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl_tasks=1, loss_mode='revised_uncertainty'):
     """ Builds the neural network architecture """
 
     # the input layer
@@ -681,7 +690,6 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                               kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
                               name=f'{pheno_task_name}_pred')(pooled)
         y_pheno = layers.Input(shape=(1,), name=f'{pheno_task_name}_true')
-
     output_layers.append(output)
 
     ### this is the dummy for the freq regression for class this must be softmax as activation
@@ -706,9 +714,8 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     # todo is there any solution that solves this better (by taking the y_train´´ as those )
     # accoring to https://towardsdatascience.com/solving-the-tensorflow-keras-model-loss-problem-fd8281aeeb11
     # it is mandatory to add y_trues as inputs...
-    # but also it recommends the endpoint loss layer, that might be just what i wanted
 
-    if mtl_tasks > 1:
+    if mtl_tasks > 1 and loss_mode == 'revised_uncertainty':
         sigmas = []
         sigma_init = tf.random_uniform_initializer(minval=0.2, maxval=1.)
         for i in range(len(losses)):
@@ -731,6 +738,7 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                       loss=losses,
                       metrics=metrics)
     # metrics are a list of lists, first LIST is for first output and so on...
+    # model.losses coming from Conv, Dense and RevisedUncertaintyyLoss Layer) -> maybe cancel losses from Dense layers
     return model
 
 

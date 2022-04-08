@@ -22,10 +22,21 @@ from mpl_toolkits.axes_grid1 import ImageGrid
 import seaborn as sns
 from cellCnn.utils import mkdir_p
 import statsmodels.api as sm
+import fnmatch
 
 logger = logging.getLogger(__name__)
 plt.rcParams["mpl_toolkits.legacy_colorbar"] = False
 
+
+def plot_model_losses(history, directory, irun):
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.title('losses')
+    plt.ylabel('loss')
+    plt.xlabel('epoch')
+    plt.legend(['train', 'valid'], loc='upper left')
+    plt.savefig(f'{directory}/losses_plot_{irun}.png')
+    plt.close()
 
 def plot_results(results, samples, phenotypes, labels, outdir,
                  filter_diff_thres=.2, filter_response_thres=0, response_grad_cutoff=None,
@@ -184,13 +195,16 @@ def plot_results(results, samples, phenotypes, labels, outdir,
     for i_filter in keep_idx:
         w = filters[i_filter, :nmark]
         b = filters[i_filter, nmark]
+        # this is like in get_selected_cells
         g = np.sum(w.reshape(1, -1) * x, axis=1) + b
         g = g * (g > 0)
+        # todo research why i dont consider anticorrelations
 
         # skip a filter if it does not select any cell
         if np.max(g) <= 0:
             continue
 
+        # cumulative density function stuff...
         ecdf = sm.distributions.ECDF(g)
         gx = np.linspace(np.min(g), np.max(g))
         gy = ecdf(gx)
@@ -256,12 +270,14 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
         filter_diff = filter_diff[sorted_idx]
         keep_idx = [sorted_idx[0]]
         for i in range(0, len(filter_diff) - 1):
+            # todo is this a bug ?
             if (filter_diff[i] - filter_diff[i + 1]) < filter_diff_thres * filter_diff[i]:
                 keep_idx.append(sorted_idx[i + 1])
             else:
                 break
         if show_filters:
-            plot_filter_response_difference(filter_diff, outdir, sorted_idx, ylabel='average cell filter response difference between classes')
+            plot_filter_response_difference(filter_diff, outdir, sorted_idx,
+                                            ylabel='average cell filter response difference between classes')
 
     elif 'filter_tau' in results:
         filter_diff = results['filter_tau']
@@ -277,6 +293,46 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
                 break
         if show_filters:
             plot_filter_response_difference(filter_diff, outdir, sorted_idx, ylabel='Kendalls tau')
+
+    # MTL
+    matching_tau_keys = fnmatch.filter(results.keys(), 'filter_tau_*')
+    for key in matching_tau_keys:
+        filter_diff_mtl = results[key]
+        filter_diff_mtl[np.isnan(filter_diff_mtl)] = -1
+
+        sorted_idx = np.argsort(filter_diff_mtl)[::-1]
+        filter_diff_mtl = filter_diff_mtl[sorted_idx]
+        # keep_idx = [sorted_idx[0]]
+        for i in range(0, len(filter_diff_mtl) - 1):
+            if (filter_diff_mtl[i] - filter_diff_mtl[i + 1]) < filter_diff_thres * filter_diff_mtl[i]:
+                pass
+                # keep_idx.append(sorted_idx[i + 1])
+            else:
+                break
+        if show_filters:
+            outdir_mtl = os.path.join(outdir, key)
+            mkdir_p(outdir_mtl)
+            plot_filter_response_difference(filter_diff_mtl, outdir_mtl, sorted_idx, ylabel=f'Kendalls tau on {key}')
+
+    matching_diff_keys = fnmatch.filter(results.keys(), 'filter_diff_*')
+    for key in matching_diff_keys:
+        filter_diff_mtl = results[key]
+        filter_diff_mtl[np.isnan(filter_diff_mtl)] = -1
+
+        sorted_idx = np.argsort(filter_diff_mtl)[::-1]
+        filter_diff_mtl = filter_diff_mtl[sorted_idx]
+        # keep_idx = [sorted_idx[0]]
+        for i in range(0, len(filter_diff_mtl) - 1):
+            if (filter_diff_mtl[i] - filter_diff_mtl[i + 1]) < filter_diff_thres * filter_diff_mtl[i]:
+                pass
+                # keep_idx.append(sorted_idx[i + 1])
+            else:
+                break
+        if show_filters:
+            outdir_mtl = os.path.join(outdir, key)
+            mkdir_p(outdir_mtl)
+            plot_filter_response_difference(filter_diff_mtl, outdir_mtl, sorted_idx,
+                                            ylabel=f'average cell filter response difference between classes on {key}')
     return list(keep_idx)
 
 

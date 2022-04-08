@@ -56,4 +56,5 @@ class RevisedUncertaintyLossV2(Layer):
         ys_pred = inputs[len(self.loss_list):]
         loss = self.get_mtl_loss(ys_true, ys_pred)
         self.add_loss(loss, inputs=inputs)
+        self.add_metric(loss, name='revised_uncertainty_loss')
         return ys_pred
