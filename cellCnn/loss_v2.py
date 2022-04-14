@@ -39,7 +39,7 @@ class RevisedUncertaintyLossV2(Layer):
         assert len(ys_true) == len(self.sigmas)
         assert len(ys_pred) == len(self.sigmas)
         loss = 0.
-        for i in range(0, len(self.loss_list)):
+        for i in range(0, len(self.sigmas)):
             sigma_sq = tf.pow(self.sigmas[i], 2)
             factor = tf.math.divide_no_nan(1.0, tf.multiply(2.0, sigma_sq))
 
@@ -60,8 +60,8 @@ class RevisedUncertaintyLossV2(Layer):
 
     def call(self, inputs, *args, **kwargs):
         print('CALLING...')
-        ys_true = inputs[:len(self.loss_list)]
-        ys_pred = inputs[len(self.loss_list):]
+        ys_true = inputs[:len(self.sigmas)]
+        ys_pred = inputs[len(self.sigmas):]
         loss = self.get_mtl_loss(ys_true, ys_pred)
         self.add_loss(loss, inputs=inputs)
         self.add_metric(loss, name='revised_uncertainty_loss')

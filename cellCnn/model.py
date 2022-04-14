@@ -283,7 +283,7 @@ def train_model(train_samples, train_phenotypes, outdir,
                 maxpool_percentages=None, nfilter_choice=None,
                 learning_rate=None, coeff_l1=0, coeff_l2=1e-4, dropout='auto', dropout_p=.5,
                 max_epochs=20, patience=5,
-                dendrogram_cutoff=0.4, accur_thres=.95, verbose=1, mtl_tasks=1):
+                dendrogram_cutoff=0.4, accur_thres=.95, verbose=1, mtl_tasks=1, loss_mode=None):
     """ Performs a CellCnn analysis """
     train_phenotype_dict = init_phenotype_dict(mtl_tasks, train_phenotypes)
     valid_phenotype_dict = init_phenotype_dict(mtl_tasks, valid_phenotypes)
@@ -401,7 +401,7 @@ def train_model(train_samples, train_phenotypes, outdir,
                 nsubset_biased.append(nsubset // np.sum(valid_phenotype_dict[0] == pheno))
 
             to_keep = int(0.1 * (X_valid.shape[0] / len(valid_phenotype_dict[0])))
-            X_v, y_v = generate_biased_subsets_mtl(X_valid, valid_phenotype_dict.values(), id_valid, x_ctrl_valid,
+            X_v, y_v = generate_biased_subsets_mtl(X_valid, valid_phenotype_dictf.values(), id_valid, x_ctrl_valid,
                                                    nsubset_ctrl, nsubset_biased, ncell, to_keep,
                                                    id_ctrl=np.where(valid_phenotype_dict[0] == 0)[0],
                                                    id_biased=np.where(valid_phenotype_dict[0] != 0)[0])
@@ -488,7 +488,7 @@ def train_model(train_samples, train_phenotypes, outdir,
         # build the neural network
         model = build_model(ncell, nmark, nfilter,
                             coeff_l1, coeff_l2, k,
-                            dropout, dropout_p, regression, n_classes, lr, mtl_tasks=mtl_tasks)
+                            dropout, dropout_p, regression, n_classes, lr, mtl_tasks=mtl_tasks, loss_mode=loss_mode)
         print(model.summary())
 
         filepath = os.path.join(outdir, 'nnet_run_%d.hdf5' % irun)
@@ -528,9 +528,15 @@ def train_model(train_samples, train_phenotypes, outdir,
             valid_metric_results = dict()
             if not regression:
                 if mtl_tasks == 1:
+                    ## accuracy
                     valid_metric = model.evaluate(X_v, y_valids)
+                    ## todo check if this is only 1 position
+                    valid_metric_results[0] = valid_metric
                 else:
+                    # loss
                     valid_metric = model.evaluate([X_v, *y_valids], y_valids)
+                    valid_metric_results[0] = - valid_metric
+
 
                 if isinstance(valid_metric, list):
                     valid_metric_results = {i: metric for i, metric in enumerate(valid_metric)}
@@ -555,8 +561,7 @@ def train_model(train_samples, train_phenotypes, outdir,
                         logger.info(f"Train metric {name} achieved {t_metric:.2f}")
                 else:
                     valid_metric_results[0] = - valid_metric
-                    accuracies[irun] = valid_metric_results[0]
-            accuracies[irun] = valid_metric_results[0]  # it is always filles with the best loss!
+            accuracies[irun] = valid_metric_results[0]
 
             # extract the network parameters
             w_store[irun] = model.get_weights()
@@ -640,7 +645,7 @@ def init_phenotype_dict(mtl_tasks, phenotypes):
 
 
 def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
-                k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl_tasks=1, loss_mode='revised_uncertainty'):
+                k, dropout, dropout_p, regression, n_classes, lr=0.01, mtl_tasks=1, loss_mode=None):
     """ Builds the neural network architecture """
 
     # the input layer
@@ -718,7 +723,7 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
                                 trainable=True)
             sigmas.append(sigma)
 
-        out = RevisedUncertaintyLossV2(loss_list=losses, sigmas=sigmas)(
+        out = RevisedUncertaintyLossV2(sigmas=sigmas)(
             [y_pheno, *y_task_inputs.values(), *output_layers])
         model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=out)
         model.compile(optimizer=optimizers.Adam(learning_rate=lr),
