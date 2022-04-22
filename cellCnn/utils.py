@@ -240,7 +240,7 @@ def generate_subsets_mtl(X, pheno_map, sample_id, nsubsets, ncell, per_sample=Fa
         if per_sample:
             S[ylabel] = per_sample_subsets(X_i, nsubsets, ncell, k_init)
         else:
-            n = nsubsets[pheno_map[ylabel]]  # n = nsubsets
+            n = nsubsets[pheno_map[0][ylabel]]  # n = nsubsets
             S[ylabel] = per_sample_subsets(X_i, n, ncell, k_init)
 
     # mix them
