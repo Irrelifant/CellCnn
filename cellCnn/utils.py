@@ -151,6 +151,7 @@ def cluster_profiles(param_dict, nmark, accuracies, accur_thres=.99,
         accur_thres = np.sort(accuracies)[-3]
 
     # combine filters from multiple models
+    # param_dict list of best 3 models
     for i, params in param_dict.items():
         if accuracies[i] >= accur_thres:
             W_tot = keras_param_vector(params)
@@ -166,6 +167,8 @@ def cluster_profiles(param_dict, nmark, accuracies, accur_thres=.99,
     for key, val in c.items():
         if val > 1:
             members = w_strong[clusters == key]
+            # fix for FloatingPointError: underflow encountered in matmul
+            members = members.astype('float64')
             cons.append(representative(members, stop=nmark + 1))
     if cons:
         cons_profile = np.vstack(cons)
