@@ -21,17 +21,19 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils import shuffle
 from tensorflow import keras
-from tensorflow.keras import layers, initializers, regularizers, optimizers, callbacks
+from keras import layers, initializers, regularizers, optimizers, callbacks
 from tensorflow.python.keras.callbacks import TensorBoard
-
+from cellCnn.loss_history import LossHistory
+from cellCnn.revised_uncertainty_loss import RevisedUncertaintyLossV2
+from cellCnn.plotting import plot_model_losses
 from cellCnn.utils import cluster_profiles, keras_param_vector
 from cellCnn.utils import combine_samples, normalize_outliers_to_control, generate_subsets_mtl
-from cellCnn.utils import generate_biased_subsets, generate_biased_subsets_mtl
+from cellCnn.utils import generate_biased_subsets_mtl
 from cellCnn.utils import get_filters_classification, get_filters_regression
 from cellCnn.utils import mkdir_p
-from cellCnn.loss_history import LossHistory
-from cellCnn.loss_v2 import RevisedUncertaintyLossV2
-from cellCnn.plotting import plot_model_losses
+from cellCnn.uncertainty_loss import UncertaintyMultiLossLayer
+
+
 
 logger = logging.getLogger(__name__)
 
@@ -180,7 +182,8 @@ class CellCnn(object):
                           dropout=self.dropout, dropout_p=self.dropout_p,
                           max_epochs=self.max_epochs,
                           patience=self.patience, dendrogram_cutoff=self.dendrogram_cutoff,
-                          accur_thres=self.accur_thres, verbose=self.verbose, mtl_tasks=self.mtl_tasks)
+                          accur_thres=self.accur_thres, verbose=self.verbose, mtl_tasks=self.mtl_tasks,
+                          loss_mode=self.loss_mode)
         self.results = res
         return self
 
@@ -249,16 +252,17 @@ class CellCnn(object):
 
             # since i still need at least one input if i got my mtl model
             if len(mtl_inputs) > 1:
+                mtl_inputs_feed = []
                 for i, task in enumerate(mtl_inputs):
                     if i == 0 and not self.regression:
                         # classification
                         nclasses = len(np.unique(task))
-                        mtl_inputs[i] = tf.keras.utils.to_categorical(task, nclasses)
+                        mtl_inputs_feed.append(tf.keras.utils.to_categorical(task, nclasses))
                     else:
                         # if i != 0 its definately a regression task
-                        mtl_inputs[i] = np.asarray(task).astype(np.float64)
+                        mtl_inputs_feed.append(np.asarray(task).astype(np.float64))
 
-                prediction = model.predict([data_test, *mtl_inputs])
+                prediction = model.predict([data_test, *mtl_inputs_feed])
             else:
                 prediction = model.predict(data_test)
 
@@ -419,11 +423,11 @@ def train_model(train_samples, train_phenotypes, outdir,
     else:
         # generate 'nsubset' multi-cell inputs per input sample
         if per_sample:  # for regression
-            X_tr, y_tr = generate_subsets_mtl(X_train, train_phenotype_dict.values(), id_train,
+            X_tr, y_tr = generate_subsets_mtl(X_train, list(train_phenotype_dict.values()), id_train,
                                               nsubset, ncell, per_sample)
 
             if (valid_samples is not None) or generate_valid_set:
-                X_v, y_v = generate_subsets_mtl(X_valid, valid_phenotype_dict.values(), id_valid,
+                X_v, y_v = generate_subsets_mtl(X_valid, list(valid_phenotype_dict.values()), id_valid,
                                                 nsubset, ncell, per_sample)
 
         # generate 'nsubset' multi-cell inputs per class
@@ -432,7 +436,7 @@ def train_model(train_samples, train_phenotypes, outdir,
             for pheno in range(len(np.unique(train_phenotype_dict[0]))):
                 nsubset_list.append(nsubset // np.sum(
                     train_phenotype_dict[0] == pheno))  # out of this we will pick the amount of subsets
-            X_tr, y_tr = generate_subsets_mtl(X_train, train_phenotype_dict.values(), id_train,
+            X_tr, y_tr = generate_subsets_mtl(X_train, list(train_phenotype_dict.values()), id_train,
                                               nsubset_list, ncell, per_sample)
 
             # check if listr elements usually differ from each other (if so we got a label imbalance here!). As well i play around with per_sample,
@@ -440,7 +444,7 @@ def train_model(train_samples, train_phenotypes, outdir,
                 nsubset_list = []
                 for pheno in range(len(np.unique(valid_phenotype_dict[0]))):
                     nsubset_list.append(nsubset // np.sum(valid_phenotype_dict[0] == pheno))
-                X_v, y_v = generate_subsets_mtl(X_valid, valid_phenotype_dict.values(), id_valid,
+                X_v, y_v = generate_subsets_mtl(X_valid, list(valid_phenotype_dict.values()), id_valid,
                                                 nsubset_list, ncell, per_sample)
     logger.info("Done.")
 
@@ -505,8 +509,6 @@ def train_model(train_samples, train_phenotypes, outdir,
             y_valids = [y_v[task] for task in range(mtl_tasks)]
             np.seterr('raise')
 
-            # todo this sucks ... i need to do it like that since if i feed in a list of soze one as y label,
-            #  i get a tuple for t_true and it doesn´t get a shepe from it in compile_utils.py (tf bug) ?
             if mtl_tasks == 1:
                 history = model.fit(X_tr, y_trains[0],
                                     epochs=max_epochs, batch_size=bs,
@@ -517,51 +519,44 @@ def train_model(train_samples, train_phenotypes, outdir,
                                     epochs=max_epochs, batch_size=bs,
                                     callbacks=[earlyStopping, check, tensorboard, csv_logger, loss_history],
                                     validation_data=([X_v, *y_valids], y_valids), verbose=verbose)
-            tf.keras.utils.plot_model(model, to_file=f'{outdir}/plots/model_graph.png', show_shapes=True,
-                                      show_dtype=True)
+            #    tf.keras.utils.plot_model(model, to_file=f'{outdir}/plots/model_graph.png', show_shapes=True,
+            #                              show_dtype=True)
             plot_model_losses(history, f"{outdir}/stats/", irun)
             np.savetxt(f"{outdir}/stats/loss_history.txt", np.array(history.history['loss']), delimiter=",")
 
             # load the model from the epoch with highest validation accuracy
             # tensorboard, csv_logger, loss_history,
             model.load_weights(filepath)
-            valid_metric_results = dict()
+
             if not regression:
                 if mtl_tasks == 1:
-                    ## accuracy
-                    valid_metric = model.evaluate(X_v, y_valids)
-                    ## todo check if this is only 1 position
-                    valid_metric_results[0] = valid_metric
+                    valid_metric = model.evaluate(X_v, *y_valids)
                 else:
-                    # loss
                     valid_metric = model.evaluate([X_v, *y_valids], y_valids)
-                    valid_metric_results[0] = - valid_metric
+                valid_metric_results = {i: metric for i, metric in enumerate(valid_metric)}
+                for metric, name in zip(valid_metric_results.values(), model.metrics_names):
+                    logger.info(f"Metric {name} achieved {metric:.2f}")
+                # since the first task is the phenotype i will always have it at position 1 in my results
+                # accuracies[irun] = valid_metric_results[1]
+                # well if i dont take the total loss, probably the filters cant really tend to a cell-type...
+                accuracies[irun] = valid_metric_results[0]
 
-
-                if isinstance(valid_metric, list):
-                    valid_metric_results = {i: metric for i, metric in enumerate(valid_metric)}
-                    for metric, name in zip(valid_metric_results.values(), model.metrics_names):
-                        logger.info(f"Metric {name} achieved {metric:.2f}")
-                else:
-                    valid_metric_results[0] = valid_metric
             else:
                 if mtl_tasks == 1:
                     train_metric = model.evaluate(X_tr, y_trains, batch_size=bs)
-                    valid_metric = model.evaluate(X_v, y_trains, batch_size=bs)
+                    valid_metric = model.evaluate(X_v, y_valids, batch_size=bs)
                 else:
                     train_metric = model.evaluate([X_tr, *y_trains], y_trains, batch_size=bs)
-                    valid_metric = model.evaluate([X_v, *y_valids], y_trains, batch_size=bs)
+                    valid_metric = model.evaluate([X_v, *y_valids], y_valids, batch_size=bs)
 
-                if isinstance(valid_metric, list):
-                    valid_metric_results = {i: metric for i, metric in enumerate(valid_metric)}
-                    train_metric_results = {i: metric for i, metric in enumerate(train_metric)}
-                    for v_metric, t_metric, name in zip(valid_metric_results.values(), train_metric_results.values(),
-                                                        model.metrics_names):
-                        logger.info(f"Validation metric {name} achieved {v_metric:.2f}")
-                        logger.info(f"Train metric {name} achieved {t_metric:.2f}")
-                else:
-                    valid_metric_results[0] = - valid_metric
-            accuracies[irun] = valid_metric_results[0]
+                valid_metric_results = {i: metric for i, metric in enumerate(valid_metric)}
+                train_metric_results = {i: metric for i, metric in enumerate(train_metric)}
+                for v_metric, t_metric, name in zip(valid_metric_results.values(), train_metric_results.values(),
+                                                    model.metrics_names):
+                    logger.info(f"Validation metric {name} achieved {v_metric:.2f}")
+                    logger.info(f"Train metric {name} achieved {t_metric:.2f}")
+                # save the neg total loss
+                accuracies[irun] = - valid_metric_results[0]
 
             # extract the network parameters
             w_store[irun] = model.get_weights()
@@ -580,7 +575,6 @@ def train_model(train_samples, train_phenotypes, outdir,
     # Not executeable with nfilters=[1]
     w_best_net = keras_param_vector(best_net)
 
-    # todo check if losses match accuracies (+/- ... )
     # post-process the learned filters
     # cluster weights from all networks that achieved losses above the specified thershold
     w_cons, cluster_res = cluster_profiles(w_store, nmark, accuracies, accur_thres,
@@ -670,42 +664,45 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     losses, metrics, output_layers = [], [], []
     pheno_task_name = 'phenotype'
     if not regression:
-        losses.append(tf.keras.losses.CategoricalCrossentropy())  # for phenotype
+        losses.append([tf.keras.losses.CategoricalCrossentropy()])  # for phenotype
         metrics.append(['accuracy', tf.keras.metrics.Precision(), tf.keras.metrics.Recall()])
         # append regression frequency tasks
         output = layers.Dense(units=n_classes,
                               activation='softmax',
                               kernel_initializer=initializers.RandomUniform(),
                               kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
-                              name=f'{pheno_task_name}_pred')(pooled)
-        y_pheno = layers.Input(shape=(2,), name=f'{pheno_task_name}_true')
+                              name=f'{pheno_task_name}_cat_pred')(pooled)
+
+        y_pheno = layers.Input(shape=(n_classes,), name=f'{pheno_task_name}_true')
     else:
-        losses.append(keras.losses.MeanSquaredError())
+        losses.append([tf.keras.losses.MeanSquaredError()])
         metrics.append(['mean_squared_error', tfa.metrics.r_square.RSquare(dtype=tf.float32, y_shape=(1,))])
         output = layers.Dense(units=1,
                               activation='linear',
                               kernel_initializer=initializers.RandomUniform(),
                               kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
-                              name=f'{pheno_task_name}_pred')(pooled)
+                              name=f'{pheno_task_name}_reg_pred')(pooled)
+
+
         y_pheno = layers.Input(shape=(1,), name=f'{pheno_task_name}_true')
     output_layers.append(output)
 
     ### this is the dummy for the freq regression for class this must be softmax as activation
     # all my atl tasks will be of regression type, start from 1 to not add the phenotype task twice
-    # todo make it not mandadorty to put pheno first
     y_task_inputs = dict()
 
     # the rest is filled with regression freq. tasks
     for task in range(1, mtl_tasks):
         taskname = f'input_task_{task}'
-        losses.append(keras.losses.MeanSquaredError())
+        losses.append([tf.keras.losses.MeanSquaredError()])
         metrics.append(['mean_squared_error', tfa.metrics.r_square.RSquare(dtype=tf.float32, y_shape=(1,))])
         layer = layers.Dense(units=1,
-                             activation='linear',
-                             kernel_initializer=initializers.RandomUniform(),
-                             kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
-                             name=f'{taskname}_pred')(pooled)
+                                 activation='linear',
+                                 kernel_initializer=initializers.RandomUniform(),
+                                 kernel_regularizer=regularizers.l1_l2(l1=coeff_l1, l2=coeff_l2),
+                                 name=f'{taskname}_pred')(pooled)
         output_layers.append(layer)
+
         y_task_inputs[f'{taskname}_true'] = layers.Input(shape=(1,), name=f'{taskname}_true')
 
     # todo is there any solution that solves this better (by taking the y_train´´ as those )
@@ -714,23 +711,35 @@ def build_model(ncell, nmark, nfilter, coeff_l1, coeff_l2,
     # it is mandatory to add y_trues as inputs...
 
     # dynamically defining the inputs, the user needs to insert as many as tasks (obviously...)
-    if mtl_tasks > 1 and loss_mode == 'revised_uncertainty':
-        sigmas = []
-        sigma_init = tf.random_uniform_initializer(minval=0.2, maxval=1.)
-        for i in range(len(losses)):
-            sigma = tf.Variable(name=f'sigma_{i}', dtype=tf.float32,
-                                initial_value=sigma_init(shape=(), dtype='float32'),
-                                trainable=True)
-            sigmas.append(sigma)
+    if mtl_tasks > 1:
+        if loss_mode == 'uncertainty':
+            ### implementation of Alex Kendally uncertainty weighting
+            out = UncertaintyMultiLossLayer(loss_list=losses, nb_outputs=mtl_tasks)(
+                [y_pheno, *y_task_inputs.values(), *output_layers])
+            model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=out)
+            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
+                          loss=None,
+                          metrics=metrics)
+            assert len(model.layers[-1].trainable_weights) == mtl_tasks  # two log_vars, one for each output
+            assert len(model.inputs) == mtl_tasks + 1  # X and the true labels
+            assert len(model.losses) == 2
+        if loss_mode == 'revised_uncertainty':
+            ### implementation of revised uncertainty weighting
+            out = RevisedUncertaintyLossV2(loss_list=losses)([y_pheno, *y_task_inputs.values(), *output_layers])
+            model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=out)
+            model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
+                          loss=None,
+                          metrics=metrics)
 
-        out = RevisedUncertaintyLossV2(sigmas=sigmas)(
-            [y_pheno, *y_task_inputs.values(), *output_layers])
-        model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=out)
-        model.compile(optimizer=optimizers.Adam(learning_rate=lr),
-                      metrics=metrics)
-        assert len(model.inputs) == mtl_tasks + 1  # X and the true labels
-        assert len(metrics) == mtl_tasks  # one per task
-        assert len(losses) == mtl_tasks  # one per task
+            assert len(model.layers[-1].trainable_weights) == mtl_tasks  # two log_vars, one for each output
+            assert len(model.inputs) == mtl_tasks + 1  # X and the true labels
+            assert len(losses) == 2
+        if loss_mode == None:
+            # this is mostly there to not need to change the amount of inpt parameters
+            model = keras.Model(inputs=[data_input, y_pheno, *y_task_inputs.values()], outputs=output_layers)
+            model.compile(optimizer=optimizers.Adam(learning_rate=lr),
+                          loss=losses,
+                          metrics=metrics)
     else:
         model = keras.Model(inputs=data_input, outputs=output_layers)
         model.compile(optimizer=optimizers.Adam(learning_rate=lr),
