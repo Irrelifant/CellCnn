@@ -1,4 +1,23 @@
+import shutil
+
 from cellCnn.model import *
+
+def handle_directories(file):
+    plotdir = os.path.join(file[:-12], 'plots')
+    csv_dir = os.path.join(file[:-12], 'selected_cells')
+    filters_dir = f'{file[:-12]}/selected_cells/filters'
+    abundancy_dir = f'{filters_dir}/abundancies'
+    try:
+        shutil.rmtree(plotdir)
+        shutil.rmtree(csv_dir)
+    except IOError as e:
+        print("Error: %s" % (e.strerror))
+        pass
+    mkdir_p(csv_dir)
+    mkdir_p(filters_dir)
+    mkdir_p(abundancy_dir)
+    return abundancy_dir, filters_dir, plotdir
+
 
 def calc_frequencies(df, ref_dict, freq_col='cluster', return_list=False):
     frequency_dict = dict()
@@ -42,3 +61,4 @@ def get_fitted_model(X_train, X_valid, y_train, y_valid,
                       valid_samples=X_valid, valid_phenotypes=y_valid,
                       outdir=outdir)
     return model
+

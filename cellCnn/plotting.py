@@ -28,6 +28,55 @@ logger = logging.getLogger(__name__)
 plt.rcParams["mpl_toolkits.legacy_colorbar"] = False
 
 
+
+
+def plot_tSNE_for_selected_cells(x_tsne_df, selected_cells_filter, colormap, cluster_to_color_dict, filter_idx, thres,
+                                 savedir, cluster_to_celltype_dict):
+    x_tsne_pos = x_tsne_df.iloc[selected_cells_filter.index, :]
+    fig = plt.figure(figsize=(15, 15))
+    fig.clf()
+    plt.scatter(x_tsne_df.iloc[:, 0], x_tsne_df.iloc[:, 1], s=0.8, marker='o', c='grey',
+                alpha=0.3, edgecolors='face')
+    plt.scatter(x_tsne_pos.iloc[:, 0], x_tsne_pos.iloc[:, 1], s=5, marker='o', c='red',
+                edgecolors='face')
+    for category in colormap.unique():
+        plt.annotate(cluster_to_celltype_dict[category], x_tsne_df.loc[colormap == category, [0, 1]].mean(), fontsize=22,
+                     fontweight="bold", color='black',
+                     bbox=dict(fc="white"))
+    plt.legend(cluster_to_color_dict.keys())
+    selected_rrms = x_tsne_pos[selected_cells_filter['diagnosis'] == 'RRMS']
+    selected_nindc = x_tsne_pos[selected_cells_filter['diagnosis'] == 'NINDC']
+    plt.title(f'Filter {filter_idx} selected {len(x_tsne_pos)} cells (RRMS: {len(selected_rrms)}; NINDC {len(selected_nindc)})')
+    plt.savefig(
+        '.'.join([os.path.join(savedir, f'tsne_selected_cells_filter_{filter_idx}_thresh_{thres}'), 'png']),
+        format='png')
+    plt.clf()
+    plt.close()
+
+
+def plot_abundancy_comparison_barplot(cluster_to_celltype_dict, file, thres, savedir):
+    ### pitch for plotting all the abundancies of all selected filters and plot them aside to compare within a model
+    abundancy_files = glob.glob(savedir + f'/*{thres}.csv')
+    dfs = [pd.read_csv(filename, index_col=0, header=0) for filename in abundancy_files]
+    df = pd.concat(dfs, axis=1, ignore_index=True)
+    df.columns = [filename.split('/')[-1] for filename in abundancy_files]
+    df = df.reset_index()
+    dfm = df.melt('cluster', var_name='cols', value_name='vals')
+    if dfm.shape[0] == 0:
+        print('Cant create a comparison barplot since we have not sufficient data')
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+        sns.barplot(x='cluster', y='vals', hue='cols', data=dfm)
+        available_labels = dfm.iloc[:, 0].unique()
+        x_tick_labels = [v for k, v in cluster_to_celltype_dict.items() if k in available_labels]
+        if len(x_tick_labels) < 7:
+            print(f'################################## {file} has only 6 clusters!')
+        ax.set_xticklabels(x_tick_labels)
+        plt.title(f' Abundancy comparison barplot')
+        plt.savefig(f'{savedir}/comparison_barplot_thres_{thres}.png')
+        plt.close()
+
+
 def plot_model_losses(history, directory, irun):
     plt.plot(history.history['loss'])
     plt.plot(history.history['val_loss'])
@@ -36,6 +85,27 @@ def plot_model_losses(history, directory, irun):
     plt.xlabel('epoch')
     plt.legend(['train', 'valid'], loc='upper left')
     plt.savefig(f'{directory}/losses_plot_{irun}.png')
+    plt.close()
+
+
+def plot_selected_cells_for_filter_tsne(x_tsne_df, selected_cells_filter, filter_idx, cluster, abundancy_dir='abundancies'):
+    logger.info("Computing t-SNE projection...")
+    x_tsne_pos = x_tsne_df.iloc[selected_cells_filter.index, :]
+    fig = plt.figure(figsize=(15, 15))
+    fig.clf()
+    #a = x_for_tsne[g_tsne > thres]
+    cluster_to_color_dict = {0: u'orchid', 1: u'darkcyan', 3: u'grey', 8: u'dodgerblue', 10: u'honeydue',
+                             11: u'turquoise', 16: u'darkviolet'}
+    cluster_to_color_series = cluster.replace(cluster_to_color_dict, regex=True)
+    plt.scatter(x_tsne_df.iloc[:, 0], x_tsne_df.iloc[:, 1], s=0.8, marker='o', c=cluster,
+                alpha=0.3, edgecolors='face')
+    plt.scatter(x_tsne_pos.iloc[:, 0], x_tsne_pos.iloc[:, 1], s=3.8, marker='o', c='red',
+                edgecolors='face')
+    plt.legend(cluster_to_color_dict.keys())
+    plt.title(f'Filter {filter_idx} selected {len(x_tsne_pos)} cells')
+    plt.savefig('.'.join([os.path.join(abundancy_dir, 'tsne_selected_cells_filter_%d' % filter_idx), 'png']),
+                format='png')
+    plt.clf()
     plt.close()
 
 def plot_results(results, samples, phenotypes, labels, outdir,
@@ -198,9 +268,6 @@ def plot_results(results, samples, phenotypes, labels, outdir,
         # this is like in get_selected_cells
         g = np.sum(w.reshape(1, -1) * x, axis=1) + b
         g = g * (g > 0)
-        # todo research why i dont consider anticorrelations
-        # - when plotting the filters cell populations i didn´´ detect noticable results
-        # - confirm this with further experiments...
 
         # skip a filter if it does not select any cell
         if np.max(g) <= 0:
@@ -261,7 +328,11 @@ def plot_results(results, samples, phenotypes, labels, outdir,
 
 def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True):
     mkdir_p(outdir)
-    keep_idx = np.arange(results['selected_filters'].shape[0])
+    if results['selected_filters'] is not None:
+        keep_idx = np.arange(results['selected_filters'].shape[0])
+    else:
+        print('NoneType selected filters found, not plotting discriminative filters')
+        return
 
     # select the discriminative filters based on the validation set
     if 'filter_diff' in results:
@@ -278,7 +349,7 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
             else:
                 break
         if show_filters:
-            plot_filter_response_difference(filter_diff, outdir, sorted_idx,
+            plot_filter_response_difference(filter_diff, outdir, sorted_idx, filter_diff_thres,
                                             ylabel='average cell filter response difference between classes')
 
     elif 'filter_tau' in results:
@@ -294,7 +365,7 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
             else:
                 break
         if show_filters:
-            plot_filter_response_difference(filter_diff, outdir, sorted_idx, ylabel='Kendalls tau')
+            plot_filter_response_difference(filter_diff, outdir, sorted_idx, filter_diff_thres,ylabel='Kendalls tau')
 
     # MTL
     matching_tau_keys = fnmatch.filter(results.keys(), 'filter_tau_*')
@@ -314,7 +385,7 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
         if show_filters:
             outdir_mtl = os.path.join(outdir, key)
             mkdir_p(outdir_mtl)
-            plot_filter_response_difference(filter_diff_mtl, outdir_mtl, sorted_idx, ylabel=f'Kendalls tau on {key}')
+            plot_filter_response_difference(filter_diff_mtl, outdir_mtl, sorted_idx, filter_diff_thres, ylabel=f'Kendalls tau on {key}')
 
     matching_diff_keys = fnmatch.filter(results.keys(), 'filter_diff_*')
     for key in matching_diff_keys:
@@ -333,12 +404,12 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
         if show_filters:
             outdir_mtl = os.path.join(outdir, key)
             mkdir_p(outdir_mtl)
-            plot_filter_response_difference(filter_diff_mtl, outdir_mtl, sorted_idx,
+            plot_filter_response_difference(filter_diff_mtl, outdir_mtl, sorted_idx, filter_diff_thres,
                                             ylabel=f'average cell filter response difference between classes on {key}')
     return list(keep_idx)
 
 
-def plot_filter_response_difference(filter_diff, outdir, sorted_idx,
+def plot_filter_response_difference(filter_diff, outdir, sorted_idx, filter_diff_thres,
                                     ylabel='average cell filter response difference between classes'):
     plt.figure()
     sns.set_style('whitegrid')
@@ -347,7 +418,7 @@ def plot_filter_response_difference(filter_diff, outdir, sorted_idx,
                rotation='vertical')
     plt.ylabel(ylabel)
     sns.despine()
-    plt.savefig(os.path.join(outdir, 'filter_response_differences.pdf'), format='pdf')
+    plt.savefig(os.path.join(outdir, f'filter_response_differences_thres_{filter_diff_thres}.pdf'), format='pdf')
     plt.clf()
     plt.close()
 
