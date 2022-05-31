@@ -7,12 +7,13 @@ def handle_directories(file):
     csv_dir = os.path.join(file[:-12], 'selected_cells')
     filters_dir = f'{file[:-12]}/selected_cells/filters'
     abundancy_dir = f'{filters_dir}/abundancies'
-    try:
-        shutil.rmtree(plotdir)
-        shutil.rmtree(csv_dir)
-    except IOError as e:
-        print("Error: %s" % (e.strerror))
-        pass
+    if is_plot == True:
+        try:
+            shutil.rmtree(plotdir)
+            shutil.rmtree(csv_dir)
+        except IOError as e:
+            print("Error: %s" % (e.strerror))
+            pass
     mkdir_p(csv_dir)
     mkdir_p(filters_dir)
     mkdir_p(abundancy_dir)
