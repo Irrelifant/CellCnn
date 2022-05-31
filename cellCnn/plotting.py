@@ -23,33 +23,33 @@ import seaborn as sns
 from cellCnn.utils import mkdir_p
 import statsmodels.api as sm
 import fnmatch
+import glob
 
 logger = logging.getLogger(__name__)
 plt.rcParams["mpl_toolkits.legacy_colorbar"] = False
 
 
-
-
 def plot_tSNE_for_selected_cells(x_tsne_df, selected_cells_filter, colormap, cluster_to_color_dict, filter_idx, thres,
                                  savedir, cluster_to_celltype_dict):
     x_tsne_pos = x_tsne_df.iloc[selected_cells_filter.index, :]
-    fig = plt.figure(figsize=(15, 15))
+    fig = plt.figure(figsize=(10, 10))
     fig.clf()
     plt.scatter(x_tsne_df.iloc[:, 0], x_tsne_df.iloc[:, 1], s=0.8, marker='o', c='grey',
                 alpha=0.3, edgecolors='face')
     plt.scatter(x_tsne_pos.iloc[:, 0], x_tsne_pos.iloc[:, 1], s=5, marker='o', c='red',
                 edgecolors='face')
     for category in colormap.unique():
-        plt.annotate(cluster_to_celltype_dict[category], x_tsne_df.loc[colormap == category, [0, 1]].mean(), fontsize=22,
+        plt.annotate(cluster_to_celltype_dict[category], x_tsne_df.loc[colormap == category, [0, 1]].mean(),
+                     fontsize=18,
                      fontweight="bold", color='black',
                      bbox=dict(fc="white"))
     plt.legend(cluster_to_color_dict.keys())
     selected_rrms = x_tsne_pos[selected_cells_filter['diagnosis'] == 'RRMS']
     selected_nindc = x_tsne_pos[selected_cells_filter['diagnosis'] == 'NINDC']
-    plt.title(f'Filter {filter_idx} selected {len(x_tsne_pos)} cells (RRMS: {len(selected_rrms)}; NINDC {len(selected_nindc)})')
+    plt.title(
+        f'Filter {filter_idx} selected {len(x_tsne_pos)} cells (RRMS: {len(selected_rrms)}; NINDC {len(selected_nindc)})')
     plt.savefig(
-        '.'.join([os.path.join(savedir, f'tsne_selected_cells_filter_{filter_idx}_thresh_{thres}'), 'png']),
-        format='png')
+        os.path.join(savedir, f'tsne_selected_cells_filter_{filter_idx}_thresh_{thres}'), format='png')
     plt.clf()
     plt.close()
 
@@ -72,7 +72,8 @@ def plot_abundancy_comparison_barplot(cluster_to_celltype_dict, file, thres, sav
         if len(x_tick_labels) < 7:
             print(f'################################## {file} has only 6 clusters!')
         ax.set_xticklabels(x_tick_labels)
-        plt.title(f' Abundancy comparison barplot')
+        plt.legend(loc = 'upper right')
+        plt.title(f'Abundancy comparison barplot')
         plt.savefig(f'{savedir}/comparison_barplot_thres_{thres}.png')
         plt.close()
 
@@ -88,12 +89,13 @@ def plot_model_losses(history, directory, irun):
     plt.close()
 
 
-def plot_selected_cells_for_filter_tsne(x_tsne_df, selected_cells_filter, filter_idx, cluster, abundancy_dir='abundancies'):
+def plot_selected_cells_for_filter_tsne(x_tsne_df, selected_cells_filter, filter_idx, cluster,
+                                        abundancy_dir='abundancies'):
     logger.info("Computing t-SNE projection...")
     x_tsne_pos = x_tsne_df.iloc[selected_cells_filter.index, :]
     fig = plt.figure(figsize=(15, 15))
     fig.clf()
-    #a = x_for_tsne[g_tsne > thres]
+    # a = x_for_tsne[g_tsne > thres]
     cluster_to_color_dict = {0: u'orchid', 1: u'darkcyan', 3: u'grey', 8: u'dodgerblue', 10: u'honeydue',
                              11: u'turquoise', 16: u'darkviolet'}
     cluster_to_color_series = cluster.replace(cluster_to_color_dict, regex=True)
@@ -107,6 +109,7 @@ def plot_selected_cells_for_filter_tsne(x_tsne_df, selected_cells_filter, filter
                 format='png')
     plt.clf()
     plt.close()
+
 
 def plot_results(results, samples, phenotypes, labels, outdir,
                  filter_diff_thres=.2, filter_response_thres=0, response_grad_cutoff=None,
@@ -385,7 +388,8 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
         if show_filters:
             outdir_mtl = os.path.join(outdir, key)
             mkdir_p(outdir_mtl)
-            plot_filter_response_difference(filter_diff_mtl, outdir_mtl, sorted_idx, filter_diff_thres, ylabel=f'Kendalls tau on {key}')
+            plot_filter_response_difference(filter_diff_mtl, outdir_mtl, sorted_idx, filter_diff_thres,
+                                            ylabel=f'Kendalls tau on {key}')
 
     matching_diff_keys = fnmatch.filter(results.keys(), 'filter_diff_*')
     for key in matching_diff_keys:
@@ -471,7 +475,7 @@ def plot_nn_weights(w, x_labels, fig_path, row_linkage=None, y_labels=None, fig_
     plt.close()
 
 
-def plot_selected_subset(xc, zc, x, labels, sample_sizes, phenotypes, outdir, suffix,
+def plot_selected_subset(xc, zc, x, labels, sample_sizes, phenotypes, outdir, suffix, base_filename,
                          stat_test=None, log_yscale=False,
                          group_a='group A', group_b='group B', group_names=None,
                          regression=False):
@@ -487,9 +491,12 @@ def plot_selected_subset(xc, zc, x, labels, sample_sizes, phenotypes, outdir, su
     sorted_ks = [('KS = %.2f' % ks_values[i]) for i in sorted_idx]
 
     fig_path = os.path.join(outdir, 'selected_population_distribution_%s.pdf' % suffix)
-    plot_marker_distribution([x[:, sorted_idx], xc[:, sorted_idx]], ['all cells', 'selected'],
+    # ['all cells', 'selected'] is fixed otherwise it would be labeled wrong
+    plot_marker_distribution([x[:, sorted_idx], xc[:, sorted_idx]], ['all', 'selected'],
                              sorted_labels, grid_size=(4, 9), ks_list=sorted_ks, figsize=(24, 10),
                              colors=['blue', 'red'], fig_path=fig_path, hist=False)
+
+
 
     # for classification, plot a boxplot of per class frequencies
     # for regression, make a biaxial plot (phenotype vs. frequency)
@@ -505,6 +512,7 @@ def plot_selected_subset(xc, zc, x, labels, sample_sizes, phenotypes, outdir, su
         if log_yscale:
             ax.set_yscale('log')
         plt.ylim(0, np.max(frequencies) + 1)
+        plt.title(f'{suffix}')
         plt.ylabel("selected population frequency (%)")
         plt.xlabel("response variable")
         sns.despine()
@@ -554,14 +562,18 @@ def plot_selected_subset(xc, zc, x, labels, sample_sizes, phenotypes, outdir, su
                          palette=sns.color_palette('Set2'))
         ax = sns.swarmplot(x="group", y="selected population frequency (%)", data=box, color=".25")
         if stat_test is not None:
-            ax.text(.45, 1.1, '%s pval = %.2e' % (stat_test, pval), horizontalalignment='center',
+            ax.text(.45, 1.2, '%s pval = %.2e' % (stat_test, pval), horizontalalignment='center',
                     transform=ax.transAxes, size=8, weight='bold')
         if log_yscale:
             ax.set_yscale('log')
         plt.ylim(0, np.max(box_data) + 1)
         sns.despine()
+        plt.title(f'{suffix}')
         plt.tight_layout()
-        fig_path = os.path.join(outdir, 'selected_population_frequencies_%s.pdf' % suffix)
+        if base_filename:
+            fig_path = os.path.join(outdir, f'{base_filename}_selected_population_frequencies_%s.pdf' % suffix)
+        else:
+            fig_path = os.path.join(outdir, 'selected_population_frequencies_%s.pdf' % suffix)
         plt.savefig(fig_path)
         plt.clf()
         plt.close()
@@ -709,15 +721,15 @@ def plot_tsne_grid(z, x, fig_path, labels=None, fig_size=(9, 9), g_j=7,
                      )
     for seq_index in range(ncol):
         ax = grid[seq_index]
-        ax.text(0, .92, labels[seq_index],
+        ax.text(0, 1.1, labels[seq_index],
                 horizontalalignment='center',
                 transform=ax.transAxes, size=20, weight='bold')
         vmin = np.percentile(x[:, seq_index], 1)
         vmax = np.percentile(x[:, seq_index], 99)
         # sns.kdeplot(z[:, 0], z[:, 1], colors='gray', cmap=None, linewidths=0.5)
         im = ax.scatter(z[:, 0], z[:, 1], s=point_size, marker='o', c=x[:, seq_index],
-                        cmap=cm.jet, alpha=0.5, edgecolors='face', vmin=vmin, vmax=vmax)
-        ax.cax.colorbar(im)
+                        cmap=cm.jet, alpha=0.5, edgecolors='face', vmin=vmin, vmax=vmax,)
+        ax.cax.colorbar(im, fraction=0.046, pad=0.04, size='1%')
         clean_axis(ax)
         ax.grid(False)
     plt.savefig('.'.join([fig_path, suffix]), format=suffix)
@@ -726,7 +738,7 @@ def plot_tsne_grid(z, x, fig_path, labels=None, fig_size=(9, 9), g_j=7,
 
 
 def plot_tsne_selection_grid(z_pos, x_pos, z_neg, vmin, vmax, fig_path,
-                             labels=None, fig_size=(9, 9), g_j=7, s=.5, suffix='png'):
+                             labels=None, fig_size=(9, 9), g_j=7, s=.5, suffix='png', filter_idx=None):
     ncol = x_pos.shape[1]
     g_i = ncol // g_j if (ncol % g_j == 0) else ncol // g_j + 1
     if labels is None:
@@ -734,6 +746,7 @@ def plot_tsne_selection_grid(z_pos, x_pos, z_neg, vmin, vmax, fig_path,
 
     fig = plt.figure(figsize=fig_size)
     fig.clf()
+
     grid = ImageGrid(fig, 111,
                      nrows_ncols=(g_i, g_j),
                      ngrids=None if ncol % g_j == 0 else ncol,
@@ -749,9 +762,9 @@ def plot_tsne_selection_grid(z_pos, x_pos, z_neg, vmin, vmax, fig_path,
                      )
     for seq_index in range(ncol):
         ax = grid[seq_index]
-        ax.text(0, .92, labels[seq_index],
+        ax.text(0.5, 1.2, labels[seq_index],
                 horizontalalignment='center',
-                transform=ax.transAxes, size=20, weight='bold')
+                transform=ax.transAxes, size=12)
         a = x_pos[:, seq_index]
         ax.scatter(z_neg[:, 0], z_neg[:, 1], s=s, marker='o', c='lightgray',
                    alpha=0.5, edgecolors='face')
@@ -760,12 +773,14 @@ def plot_tsne_selection_grid(z_pos, x_pos, z_neg, vmin, vmax, fig_path,
         ax.cax.colorbar(im)
         clean_axis(ax)
         ax.grid(False)
+    if filter_idx is not None:
+        plt.title(f'Filter {filter_idx}')
     plt.savefig('.'.join([fig_path, suffix]), format=suffix)
     plt.clf()
     plt.close()
 
 
-def plot_2D_map(z, feat, fig_path, s=2, plot_contours=False):
+def plot_2D_map(z, feat, fig_path, s=2, plot_contours=False, filter_idx=None):
     sns.set_style('white')
     _fig, ax = plt.subplots(figsize=(5, 5))
     if plot_contours:
@@ -788,6 +803,8 @@ def plot_2D_map(z, feat, fig_path, s=2, plot_contours=False):
     sns.despine()
     if issubclass(feat.dtype.type, np.integer):
         plt.legend(loc="upper left", markerscale=5., scatterpoints=1, fontsize=10)
+    if filter_idx is not None:
+        plt.title(f'Filter {filter_idx}')
     plt.xlabel('tSNE dimension 1', fontsize=20)
     plt.ylabel('tSNE dimension 2', fontsize=20)
     plt.savefig(fig_path, format=fig_path.split('.')[-1])
