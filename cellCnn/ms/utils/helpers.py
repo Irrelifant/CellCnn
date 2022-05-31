@@ -50,7 +50,7 @@ def calc_frequencies(df, ref_dict, freq_col='cluster', return_list=False):
     return frequency_dict
 
 
-def split_test_train_valid(*args, train_perc=0.8, test_perc=0.2, valid_perc=0.5, seed=123):
+def split_test_train_valid(*args, train_perc=0.8, test_perc=0.2, valid_perc=0.5, seed=123, savedir=None):
     results = dict()
     for i, value in enumerate(args):
         length = len(value)
@@ -58,7 +58,9 @@ def split_test_train_valid(*args, train_perc=0.8, test_perc=0.2, valid_perc=0.5,
         results[f'{i}_train'] = np.asarray(value[int(test_perc * length):], dtype=object)
         results[f'{i}_valid'] = np.asarray(results[f'{i}_test'][int(valid_perc * len(results[f'{i}_test'])):], dtype=object)
         results[f'{i}_test'] = np.asarray(results[f'{i}_test'][:int(valid_perc * len(results[f'{i}_test']))], dtype=object)
-
+    if savedir is not None:
+        with open(f'{savedir}/saved_data_splits.pkl', 'wb') as f:
+            pickle.dump(results, f)
     return results.values()
 
 
