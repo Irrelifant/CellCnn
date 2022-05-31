@@ -1,8 +1,26 @@
 import shutil
+import pickle
+
+from scipy import stats
 
 from cellCnn.model import *
 
-def handle_directories(file):
+
+### MARKER SELECTED vs ALL
+# gets me distribution in an ALL vs SELECTED cell fashion
+# sort markers in decreasing order of KS statistic
+def get_sorted_ks(arraylike_one, arraylike_two, labels):
+    ks_values = []
+    for j in range(len(labels)):
+        ks = stats.ks_2samp(arraylike_one[:, j], arraylike_two[:, j])
+        ks_values.append(ks[0])
+    # sort markers in decreasing order of KS statistic
+    sorted_idx = np.argsort(np.array(ks_values))[::-1]
+    sorted_labels = [labels[i] for i in sorted_idx]
+    sorted_ks = [('KS = %.2f' % ks_values[i]) for i in sorted_idx]
+    return sorted_ks, sorted_idx, sorted_labels
+
+def handle_directories(file, is_plot=False):
     plotdir = os.path.join(file[:-12], 'plots')
     csv_dir = os.path.join(file[:-12], 'selected_cells')
     filters_dir = f'{file[:-12]}/selected_cells/filters'
