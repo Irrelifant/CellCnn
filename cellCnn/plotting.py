@@ -124,7 +124,7 @@ def plot_results(results, samples, phenotypes, labels, outdir,
         - samples :
             Samples from which to visualize the selected cell populations.
         - phenotypes :
-            List of phenotypes corresponding to the provided `samples`.
+            List of phenotypes f to the provided `samples`.
         - labels :
             Names of measured markers.
         - outdir :
@@ -368,7 +368,7 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
             else:
                 break
         if show_filters:
-            plot_filter_response_difference(filter_diff, outdir, sorted_idx, filter_diff_thres,ylabel='Kendalls tau')
+            plot_filter_response_difference(filter_diff, outdir, sorted_idx, filter_diff_thres, ylabel='Kendalls tau')
 
     # MTL
     matching_tau_keys = fnmatch.filter(results.keys(), 'filter_tau_*')
@@ -577,6 +577,64 @@ def plot_selected_subset(xc, zc, x, labels, sample_sizes, phenotypes, outdir, su
         plt.savefig(fig_path)
         plt.clf()
         plt.close()
+
+
+def plot_marker_boxplots(datalist, namelist, labels, grid_size, fig_path=None, letter_size=8,
+                         figsize=(9, 9), ks_list=None, colors=None, stat_test=None):
+    assert len(datalist) == len(namelist)
+    sns.set(font_scale=0.5)
+    g_i, g_j = grid_size
+    if colors is None:
+        colors = sns.color_palette("Set1", n_colors=len(datalist), desat=.5)
+
+    fig = plt.figure(figsize=figsize)
+    grid = gridspec.GridSpec(g_i, g_j, wspace=1.3, hspace=.6)
+    for i in range(g_i):
+        for j in range(g_j):
+            seq_index = g_j * i + j
+            if seq_index < len(labels):
+                ax = fig.add_subplot(grid[i, j])
+                ax.text(.5, .98, labels[seq_index], fontsize=letter_size, ha='center',
+                        transform=ax.transAxes)
+
+                # statistical test
+                if (len(datalist) == 2) and (stat_test is not None):
+                    data_a, data_b = datalist[0][:, seq_index], datalist[1][:, seq_index]
+                    if stat_test == 'mannwhitneyu':
+                        _t, pval = stats.mannwhitneyu(data_a, data_b)
+                    else:
+                        _t, pval = stats.ttest_ind(data_a, data_b)
+                else:
+                    pval = None
+
+                box = pd.DataFrame(columns=['group', 'selected population frequency (%)'])
+                box_grade = []
+                box_data = []
+                for i_name, (name, data) in enumerate(zip(namelist, datalist)):
+                    box_grade.extend([name] * len(data))
+                    box_data.append(np.array(data[:, seq_index]))
+                box_data = np.hstack(box_data)
+                box['group'] = box_grade
+                box['selected population frequency (%)'] = box_data
+                bxplt = sns.boxplot(x="group", y="selected population frequency (%)", data=box, width=.5,
+                                 palette=sns.color_palette('Set2'), ax=ax)
+                #ax = sns.stripplot(x="group", y="selected population frequency (%)", data=box, color=".25", size=0.5)
+
+                if stat_test is not None:
+                    ax.text(.45, 1.1, '%s' % stat_test, horizontalalignment='center',
+                            transform=ax.transAxes, size=8, weight='bold')
+                    ax.text(.45, 1, 'pval=%.2e' % pval, horizontalalignment='center',
+                            transform=ax.transAxes, size=8, weight='bold')
+
+                plt.ylim(np.min(box_data)-0.05, np.max(box_data)+0.05)
+                bxplt.set(xlabel=None, ylabel=None)
+                bxplt.set_xticklabels(bxplt.get_xticklabels(), rotation=45)
+  #              bxplt.set_yticklabels(bxplt.get_yticklabels(), rotation=90)
+    fig.tight_layout()
+    plt.legend(bbox_to_anchor=(1.5, 0.9))
+    sns.despine()
+    plt.savefig(fig_path)
+    plt.close()
 
 
 def plot_marker_distribution(datalist, namelist, labels, grid_size, fig_path=None, letter_size=16,
