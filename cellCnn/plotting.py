@@ -3,7 +3,7 @@
 This module contains functions for plotting the results of a CellCnn analysis.
 
 """
-
+import copy
 import os
 import sys
 import logging
@@ -333,6 +333,7 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
     mkdir_p(outdir)
     if results['selected_filters'] is not None:
         keep_idx = np.arange(results['selected_filters'].shape[0])
+        keep_idx_additional_tasks = dict()
     else:
         print('NoneType selected filters found, not plotting discriminative filters')
         return
@@ -346,7 +347,6 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
         filter_diff = filter_diff[sorted_idx]
         keep_idx = [sorted_idx[0]]
         for i in range(0, len(filter_diff) - 1):
-            # todo is this a bug ?
             if (filter_diff[i] - filter_diff[i + 1]) < filter_diff_thres * filter_diff[i]:
                 keep_idx.append(sorted_idx[i + 1])
             else:
@@ -356,6 +356,7 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
                                             ylabel='average cell filter response difference between classes')
 
     elif 'filter_tau' in results:
+        keep_idx_prev = copy.copy(keep_idx)
         filter_diff = results['filter_tau']
         filter_diff[np.isnan(filter_diff)] = -1
 
@@ -373,16 +374,17 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
     # MTL
     matching_tau_keys = fnmatch.filter(results.keys(), 'filter_tau_*')
     for key in matching_tau_keys:
+        keep_idx_additional_tasks[key] = np.arange(results['selected_filters'].shape[0])
+
         filter_diff_mtl = results[key]
         filter_diff_mtl[np.isnan(filter_diff_mtl)] = -1
 
         sorted_idx = np.argsort(filter_diff_mtl)[::-1]
         filter_diff_mtl = filter_diff_mtl[sorted_idx]
-        # keep_idx = [sorted_idx[0]]
+        keep_idx_additional_tasks[key] = [sorted_idx[0]]
         for i in range(0, len(filter_diff_mtl) - 1):
             if (filter_diff_mtl[i] - filter_diff_mtl[i + 1]) < filter_diff_thres * filter_diff_mtl[i]:
-                pass
-                # keep_idx.append(sorted_idx[i + 1])
+                keep_idx_additional_tasks[key].append(sorted_idx[i + 1])
             else:
                 break
         if show_filters:
@@ -393,16 +395,17 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
 
     matching_diff_keys = fnmatch.filter(results.keys(), 'filter_diff_*')
     for key in matching_diff_keys:
+        keep_idx_additional_tasks[key] = np.arange(results['selected_filters'].shape[0])
+
         filter_diff_mtl = results[key]
         filter_diff_mtl[np.isnan(filter_diff_mtl)] = -1
 
         sorted_idx = np.argsort(filter_diff_mtl)[::-1]
         filter_diff_mtl = filter_diff_mtl[sorted_idx]
-        # keep_idx = [sorted_idx[0]]
+        keep_idx_additional_tasks[key] = [sorted_idx[0]]
         for i in range(0, len(filter_diff_mtl) - 1):
             if (filter_diff_mtl[i] - filter_diff_mtl[i + 1]) < filter_diff_thres * filter_diff_mtl[i]:
-                pass
-                # keep_idx.append(sorted_idx[i + 1])
+                keep_idx_additional_tasks[key].append(sorted_idx[i + 1])
             else:
                 break
         if show_filters:
@@ -410,7 +413,7 @@ def discriminative_filters(results, outdir, filter_diff_thres, show_filters=True
             mkdir_p(outdir_mtl)
             plot_filter_response_difference(filter_diff_mtl, outdir_mtl, sorted_idx, filter_diff_thres,
                                             ylabel=f'average cell filter response difference between classes on {key}')
-    return list(keep_idx)
+    return list(keep_idx), keep_idx_additional_tasks
 
 
 def plot_filter_response_difference(filter_diff, outdir, sorted_idx, filter_diff_thres,
@@ -475,18 +478,22 @@ def plot_nn_weights(w, x_labels, fig_path, row_linkage=None, y_labels=None, fig_
     plt.close()
 
 
+
 def plot_selected_subset(xc, zc, x, labels, sample_sizes, phenotypes, outdir, suffix, base_filename,
                          stat_test=None, log_yscale=False,
                          group_a='group A', group_b='group B', group_names=None,
-                         regression=False):
+                         regression=False,  metric=None, metric_ct=None, metric_pheno=None):
     ks_values = []
+    p_vals = []
     nmark = x.shape[1]
     for j in range(nmark):
         ks = stats.ks_2samp(xc[:, j], x[:, j])
         ks_values.append(ks[0])
+        p_vals.append(ks[1])
 
     # sort markers in decreasing order of KS statistic
     sorted_idx = np.argsort(np.array(ks_values))[::-1]
+    p_vals = [p_vals[i] for i in sorted_idx]
     sorted_labels = [labels[i] for i in sorted_idx]
     sorted_ks = [('KS = %.2f' % ks_values[i]) for i in sorted_idx]
 
@@ -494,7 +501,7 @@ def plot_selected_subset(xc, zc, x, labels, sample_sizes, phenotypes, outdir, su
     # ['all cells', 'selected'] is fixed otherwise it would be labeled wrong
     plot_marker_distribution([x[:, sorted_idx], xc[:, sorted_idx]], ['all', 'selected'],
                              sorted_labels, grid_size=(4, 9), ks_list=sorted_ks, figsize=(24, 10),
-                             colors=['blue', 'red'], fig_path=fig_path, hist=False)
+                             colors=['blue', 'red'], fig_path=fig_path, hist=False, pval_list=p_vals)
 
 
 
@@ -638,7 +645,7 @@ def plot_marker_boxplots(datalist, namelist, labels, grid_size, fig_path=None, l
 
 
 def plot_marker_distribution(datalist, namelist, labels, grid_size, fig_path=None, letter_size=16,
-                             figsize=(9, 9), ks_list=None, colors=None, hist=False):
+                             figsize=(9, 9), ks_list=None, pval_list=None, colors=None, hist=False):
     nmark = len(labels)
     assert len(datalist) == len(namelist)
     g_i, g_j = grid_size
@@ -656,8 +663,15 @@ def plot_marker_distribution(datalist, namelist, labels, grid_size, fig_path=Non
                 if ks_list is not None:
                     ax.text(.5, 1.2, labels[seq_index], fontsize=letter_size, ha='center',
                             transform=ax.transAxes)
-                    ax.text(.5, 1.02, ks_list[seq_index], fontsize=letter_size - 4, ha='center',
-                            transform=ax.transAxes)
+                    if pval_list is not None:
+                        ax.text(.5, 1.08, ks_list[seq_index], fontsize=letter_size - 6, ha='center',
+                                transform=ax.transAxes)
+                        p_Val = round(pval_list[seq_index], 4)
+                        ax.text(.5, 0.98, f'p = {p_Val}', fontsize=letter_size - 6, ha='center',
+                                transform=ax.transAxes)
+                    else:
+                        ax.text(.5, 1.02, ks_list[seq_index], fontsize=letter_size - 4, ha='center',
+                                transform=ax.transAxes)
                 else:
                     ax.text(.5, 1.1, labels[seq_index], fontsize=letter_size, ha='center',
                             transform=ax.transAxes)
@@ -667,16 +681,16 @@ def plot_marker_distribution(datalist, namelist, labels, grid_size, fig_path=Non
                     if seq_index == nmark - 1:
                         if hist:
                             plt.hist(x[:, seq_index], np.linspace(lower, upper, 10),
-                                     color=colors[i_name], label=name, alpha=.5, normed=True)
+                                     color=colors[i_name], label=name, alpha=.5)
                         else:
-                            sns.kdeplot(x[:, seq_index], shade=True, color=colors[i_name], label=name,
+                            sns.kdeplot(x=x[:, seq_index], shade=True, color=colors[i_name], label=name,
                                         clip=(lower, upper))
                     else:
                         if hist:
                             plt.hist(x[:, seq_index], np.linspace(lower, upper, 10),
-                                     color=colors[i_name], label=name, alpha=.5, normed=True)
+                                     color=colors[i_name], label=name, alpha=.5)
                         else:
-                            sns.kdeplot(x[:, seq_index], shade=True, color=colors[i_name], clip=(lower, upper))
+                            sns.kdeplot(x=x[:, seq_index], shade=True, color=colors[i_name], clip=(lower, upper))
                 ax.get_yaxis().set_ticks([])
                 # ax.get_xaxis().set_ticks([-2, 0, 2, 4])
 
