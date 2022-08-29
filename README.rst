@@ -6,26 +6,22 @@ CellCnn
 Installation
 ============
 
-CellCnn was originally written in Python2.7. For a Python3 version, please check out this branch:
- https://github.com/eiriniar/CellCnn/tree/python3
+This branch contains a Python 3.7 implementation of CellCnn. We recommend using it with
+`pipenv <https://pypi.org/project/pipenv/>`_, by following the steps below:
 
-There are several ways to run Python, but we recommend using a virtual environment.
-To set up a virtual environment, you can perform the following steps:
+#. Clone the CellCnn repository and checkout the `python3` branch:
+    ``git clone -b python3 https://github.com/eiriniar/CellCnn.git``
 
-1. Download the Python2.7 installation script corresponding to your operating system from https://conda.io/miniconda.html . For example, for Mac OS it should be called "Miniconda2-latest-MacOSX-x86_64.sh".
+#. Go to the CellCnn root directory:
+    ``cd CellCnn``
 
-2. Run the installation script (please use the script name corresponding to your operating system):
-    ``bash Miniconda2-latest-MacOSX-x86_64.sh``
+#. Install CellCnn and its dependencies:
+    ``pipenv install``
 
-3. Open a new terminal and create a virtual environment for CellCnn, e.g. "cellcnn_env":
-    ``conda create --name cellcnn_env python=2.7``
+The above steps have to be performed only once.
+Then, each time you want to perform a CellCnn analysis, go to the CellCnn root directory and activate the pipenv virtual environment by running:
 
-4. Activate the virtual environment:
-    ``source activate cellcnn_env``
-
-----
-
-After having Python2.7 running on your system, please do the following to install CellCnn:
+#.   ``pipenv shell``
 
 1. Clone the CellCnn repository:
     ``git clone https://github.com/eiriniar/CellCnn.git``
